@@ -16,7 +16,7 @@ The project **must** be holistic, i.e. have no parts that I cannot complete in t
 
 All documentation for Unlink and Monad are available in docs/. `monad-full.md` is a large and comprehensive file of all of Monad's capabilities (1.4MB), so maybe slice through it instead of reading it all at once.
 
-Target Neobank, x402 agents, Stablecoin, or DeFi tracks, not Treasury and Payroll. Make something that goes beyond simple "Ghost Treasury Desk", or "Ghost Payroll Ops", etc. Also make it something that a CS student can explain. Going too deep into finance might make me seem incompetent in the demo.
+Target x402 agents, Stablecoin, or DeFi tracks, not Treasury, Payroll, and Neobank. Make something that goes beyond simple "Ghost Treasury Desk", or "Ghost Payroll Ops", etc. Also make it something that a CS student can explain. Going too deep into finance might make me seem incompetent in the demo. Prediction markets are hot. Install any packages you desire; do not limit yourself to the currently installed packages.
 
 ### Infra 
 
