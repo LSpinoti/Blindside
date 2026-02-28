@@ -3,13 +3,13 @@
   "version": "1.0.0",
   "description": "",
   "type": "module",
-  "scripts": {
-  },
+  "scripts": {},
   "keywords": [],
   "author": "",
   "license": "ISC",
   "packageManager": "pnpm@10.28.2",
   "dependencies": {
+    "@pythnetwork/pyth-sdk-solidity": "^4.3.1",
     "@unlink-xyz/cli": "^0.1.5",
     "@unlink-xyz/core": "^0.1.5",
     "@unlink-xyz/multisig": "^0.1.5",
