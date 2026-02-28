@@ -133,8 +133,12 @@ button {
 .status-pill {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   border-left: 3px solid var(--accent);
+}
+
+.direction-pill {
+  gap: 10px;
 }
 
 .status-pill.subtle {

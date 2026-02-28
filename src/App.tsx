@@ -343,6 +343,7 @@ export default function App() {
                 <span
                   className={`direction-pill ${selectedMarket.moveDirection.toLowerCase()}`}
                 >
+                  <span className="live-dot" aria-hidden="true" />
                   {selectedMarket.moveDirection}
                 </span>
               ) : null}
@@ -402,6 +403,7 @@ export default function App() {
                   <span
                     className={`direction-pill ${market.moveDirection.toLowerCase()}`}
                   >
+                    <span className="live-dot" aria-hidden="true" />
                     {market.moveDirection}
                   </span>
                 </div>

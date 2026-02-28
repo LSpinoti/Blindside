@@ -30,7 +30,7 @@ export function getServerConfig(): BlindsideServerConfig {
         ticker: "Crypto.BTC/USD",
         feedId:
           "e62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43",
-        accent: "#f97316",
+        accent: "#ef8e19",
       },
       {
         id: "eth-24h",
@@ -48,7 +48,7 @@ export function getServerConfig(): BlindsideServerConfig {
         ticker: "Crypto.SOL/USD",
         feedId:
           "ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d",
-        accent: "#ec4899",
+        accent: "#13cd96",
       },
       {
         id: "mon-24h",
@@ -57,7 +57,7 @@ export function getServerConfig(): BlindsideServerConfig {
         ticker: "Crypto.MON/USD",
         feedId:
           "e786153cc54abd4b0e53b4c246d54d9f8eb3f3b5a34d4fc5a2e9a423b0ba5d6b",
-        accent: "#8b5cf6",
+        accent: "#836ef9",
       },
     ],
   };
