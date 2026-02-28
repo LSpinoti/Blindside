@@ -4,6 +4,7 @@ import {
   createPublicClient,
   createWalletClient,
   http,
+  isAddress,
   parseAbi,
   type Hex,
 } from "viem";
@@ -11,7 +12,7 @@ import { privateKeyToAccount } from "viem/accounts";
 import { monadTestnet } from "viem/chains";
 
 const DEFAULT_RPC_URL = "https://testnet-rpc.monad.xyz";
-const DEFAULT_MARKET_ADDRESS = "0x27Cf059b318C287684992a5bae7919fdaff5D205";
+const DEFAULT_MARKET_ADDRESS = "0x719BfAdA8caA300A26adfe0eCf54bDF08E1B330E";
 const DEFAULT_PYTH_ADDRESS = "0xad2B52D2af1a9bD5c561894Cdd84f7505e1CD0B5";
 const DEFAULT_HERMES_URL = "https://hermes-beta.pyth.network";
 const DEFAULT_FEED_ID =
@@ -38,8 +39,9 @@ type PythLatestResponse = {
 };
 
 async function main(): Promise<void> {
+  const cliMarketAddress = process.argv[2];
   const marketAddress =
-    process.env.BLINDSIDE_MARKET_ADDRESS ?? DEFAULT_MARKET_ADDRESS;
+    cliMarketAddress ?? process.env.BLINDSIDE_MARKET_ADDRESS ?? DEFAULT_MARKET_ADDRESS;
   const privateKey = normalizePrivateKey(process.env.PRIVATE_KEY);
   const rpcUrl = process.env.MONAD_RPC_URL ?? DEFAULT_RPC_URL;
   const pythAddress =
@@ -50,6 +52,9 @@ async function main(): Promise<void> {
 
   if (!privateKey) {
     throw new Error("PRIVATE_KEY is required.");
+  }
+  if (!isAddress(marketAddress)) {
+    throw new Error("Pass a valid market address or set BLINDSIDE_MARKET_ADDRESS.");
   }
 
   const payloadUrl = new URL("/v2/updates/price/latest", hermesUrl);
@@ -94,6 +99,7 @@ async function main(): Promise<void> {
     JSON.stringify(
       {
         txHash,
+        marketAddress,
         fee: fee.toString(),
         latestPriceE8: payload.parsed[0]?.price.price ?? null,
         exponent: payload.parsed[0]?.price.expo ?? null,

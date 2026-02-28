@@ -16,12 +16,13 @@ export const PYTH_MON_USD_FEED_ID =
 export const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 
 export type BlindsideSide = "YES" | "NO";
-export type RouteKey = "dashboard" | "markets" | "activity" | "resolve";
+export type RouteKey = "desk" | "activity" | "resolve";
 export type BurnerLifecycle = "idle" | "funded" | "in-market" | "claimable" | "swept";
 export type VisibilityScope = "Private" | "Public" | "Derived privately";
 
 export type BlindsideMarket = {
   id: string;
+  label: string;
   question: string;
   summary: string;
   strikeE8: number;

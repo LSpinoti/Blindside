@@ -9,14 +9,18 @@ Blindside is a private prediction market terminal for Monad testnet.
 
 ## Live deployment
 
-- Contract: `0x27Cf059b318C287684992a5bae7919fdaff5D205`
-- Question: `Will MON/USD settle above $0.0210 at 2026-03-31 16:00 UTC?`
+- `MAR 31 / 0.0210`: `0x719BfAdA8caA300A26adfe0eCf54bDF08E1B330E`
+- `APR 07 / 0.0235`: `0x17aF654E71AD3bD75d9D81A485a75Ee9dF87ec8A`
+- `APR 14 / 0.0260`: `0xc8c4DfEBBfCEFC8faaCD1dD4f11C22E0930ec8aF`
 
 Verification:
 
-- MonadVision: https://testnet.monadvision.com/address/0x27Cf059b318C287684992a5bae7919fdaff5D205
-- SocialScan: https://monad-testnet.socialscan.io/address/0x27Cf059b318C287684992a5bae7919fdaff5D205
-- Monadscan: https://testnet.monadscan.com/address/0x27Cf059b318C287684992a5bae7919fdaff5D205
+- Mar 31:
+  https://testnet.monadvision.com/address/0x719BfAdA8caA300A26adfe0eCf54bDF08E1B330E
+- Apr 07:
+  https://testnet.monadvision.com/address/0x17aF654E71AD3bD75d9D81A485a75Ee9dF87ec8A
+- Apr 14:
+  https://testnet.monadvision.com/address/0xc8c4DfEBBfCEFC8faaCD1dD4f11C22E0930ec8aF
 
 ## Local commands
 
@@ -24,7 +28,7 @@ Verification:
 pnpm dev
 pnpm build
 pnpm deploy:market
-pnpm resolve:market
+pnpm resolve:market 0x719BfAdA8caA300A26adfe0eCf54bDF08E1B330E
 ```
 
 ## Services
