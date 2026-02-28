@@ -6,6 +6,8 @@
 
 Feel free to read and write to .env . Currently, I have my private key (for smart contract deployment) and OpenAI API key for agents. If you need any other keys (RPC providers, etc), either fill them in yourself in .env and .env.example (if you know them) or leave it blank in .env.example.
 
+The main sponsors are Unlink and Monad.
+
 At least one smart contract **must** deployed on Monad using Monad Foundry (see monad-full.md). It is already installed in `~/.foundry/`. 
 
 Feel free to download any packages you need using `pnpm`.
@@ -57,15 +59,3 @@ The UX should be information dense, and look formal (square or low-radius edges,
 ### Services
 
 Should use Docker for dedicated services, such as an agent service, db service (always running in the background), indexer service, frontend service, backend/api service.
-
-## Features
-
-Any project idea **must** be built using all of the features listed for each technology listed below. For example, it is **critical** that the project takes advantage of Monad's fast block time and finality. In the README.md you make, highlight how each technology is used.
-
-### Unlink
-
-### Monad
-
-- Fast block time and finality (~400ms block time and ~800ms finality)
-- ERC-8004 Agents
-  - Uses both the Identity registry and the Reputation registry
