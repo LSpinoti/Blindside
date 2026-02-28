@@ -1,2 +1,6 @@
 node_modules/
 .env
+dist/
+contracts/cache/
+contracts/out/
+contracts/broadcast/
