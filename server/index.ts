@@ -113,7 +113,7 @@ async function buildPriceBoardMarket(
   const endUnix = Math.floor(Date.now() / 1000);
 
   const response = await fetch(
-    buildTradingViewHistoryUrl(asset.ticker, "5", startUnix, endUnix),
+    buildTradingViewHistoryUrl(asset.ticker, "1", startUnix, endUnix),
   );
 
   if (!response.ok) {

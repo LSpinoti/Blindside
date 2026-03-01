@@ -65,7 +65,7 @@ export function getServerConfig(): BlindsideServerConfig {
 
 export function buildTradingViewHistoryUrl(
   ticker: string,
-  resolution: "5" | "15" | "60",
+  resolution: "1" | "5" | "15" | "60",
   fromUnix: number,
   toUnix: number,
 ): string {

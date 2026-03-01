@@ -254,11 +254,21 @@ summary {
 .card,
 .selected-card,
 .market-card {
+  position: relative;
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--surface);
   box-shadow: var(--shadow);
   backdrop-filter: blur(8px);
+}
+
+.card:has(.tooltip-wrap:hover),
+.card:has(.tooltip-wrap:focus-within),
+.selected-card:has(.tooltip-wrap:hover),
+.selected-card:has(.tooltip-wrap:focus-within),
+.market-card:has(.tooltip-wrap:hover),
+.market-card:has(.tooltip-wrap:focus-within) {
+  z-index: 8;
 }
 
 .card,
@@ -334,9 +344,77 @@ summary {
 }
 
 .section-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   margin-bottom: 2px;
   font-size: 0.95rem;
   letter-spacing: -0.01em;
+}
+
+.tooltip-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.tooltip-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--surface-strong);
+  color: var(--text-faint);
+  font-size: 0.7rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.tooltip-trigger:hover {
+  color: var(--text);
+}
+
+.tooltip-trigger:focus-visible {
+  outline: 2px solid rgba(15, 118, 110, 0.18);
+  outline-offset: 2px;
+}
+
+.tooltip-bubble {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 8px);
+  z-index: 12;
+  width: min(280px, calc(100vw - 36px));
+  padding: 9px 11px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--surface-strong);
+  box-shadow: var(--shadow);
+  color: var(--text);
+  font-size: 0.8rem;
+  font-weight: 500;
+  line-height: 1.45;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(4px);
+  transition:
+    opacity 140ms ease,
+    transform 140ms ease;
+}
+
+.tooltip-bubble-start {
+  left: 0;
+  right: auto;
+}
+
+.tooltip-wrap:hover .tooltip-bubble,
+.tooltip-wrap:focus-within .tooltip-bubble {
+  opacity: 1;
+  transform: translateY(0);
 }
 
 .detail-list,
@@ -479,11 +557,20 @@ summary {
   text-transform: uppercase;
 }
 
+.subsection-title-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .compact-history {
   gap: 0;
 }
 
 .history-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
   padding: 10px 0;
   border-bottom: 1px solid var(--line);
 }
@@ -497,6 +584,32 @@ summary {
   border-bottom: 0;
 }
 
+.history-copy {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.history-direction {
+  flex: 0 0 auto;
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  color: var(--text-soft);
+}
+
+.history-direction svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.6;
+}
+
 .history-line {
   display: flex;
   align-items: center;
@@ -508,6 +621,14 @@ summary {
 .history-line.muted {
   margin-top: 4px;
   color: var(--text-soft);
+}
+
+.history-toggle {
+  align-self: center;
+  min-height: 32px;
+  margin-top: 8px;
+  padding: 0 10px;
+  font-size: 0.82rem;
 }
 
 .wallet-chip-list {

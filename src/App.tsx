@@ -127,6 +127,7 @@ export default function App() {
   const {
     authenticated,
     connectOrCreateWallet,
+    linkWallet,
     logout,
     ready: privyReady,
     signMessage,
@@ -152,6 +153,7 @@ export default function App() {
   const [privyAssets, setPrivyAssets] = useState<WalletAsset[]>(() =>
     buildDefaultWalletAssets(),
   );
+  const [showAllHistory, setShowAllHistory] = useState(false);
   const [lastSignedOrder, setLastSignedOrder] = useState<SignedOrderTicket | null>(
     null,
   );
@@ -176,7 +178,7 @@ export default function App() {
 
     const timer = window.setInterval(() => {
       void loadBoard(false);
-    }, 60000);
+    }, 1000);
 
     return () => {
       window.clearInterval(timer);
@@ -216,6 +218,16 @@ export default function App() {
     authenticated,
     embeddedWallet?.address,
   );
+  const assetsTooltip = embeddedWallet
+    ? loadingPrivyAssets
+      ? "Refreshing balances..."
+      : "Tracked balances refresh every 30 seconds."
+    : "Connect Privy to view MON and USDC balances.";
+  const tradeTicketTooltip =
+    "Orders are signed by the Privy embedded wallet so the public side stays one tap. Signed order intents stay local until you wire a matching execution API.";
+  const isHistoryBootstrapping = historyLoading && history.length === 0;
+  const visibleHistory = showAllHistory ? history : history.slice(0, 2);
+  const hiddenHistoryCount = Math.max(history.length - 2, 0);
 
   useEffect(() => {
     if (!embeddedWallet) {
@@ -713,35 +725,54 @@ export default function App() {
             <div className="subsection">
               <div className="subsection-title">Recent private activity</div>
               <div className="history-list compact-history">
-                {historyLoading ? (
+                {isHistoryBootstrapping ? (
                   <p className="muted-line">Syncing history...</p>
                 ) : history.length === 0 ? (
                   <p className="muted-line">No private activity yet.</p>
                 ) : (
-                  history.slice(0, 4).map((entry) => (
-                    <div key={entry.id} className="history-item">
-                      <div className="history-line">
-                        <strong>{entry.kind}</strong>
-                        <span>{entry.status}</span>
+                  visibleHistory.map((entry) => {
+                    const primaryAmount = entry.amounts[0];
+
+                    return (
+                      <div key={entry.id} className="history-item">
+                        <HistoryDirectionIcon direction={getHistoryDirection(entry)} />
+                        <div className="history-copy">
+                          <div className="history-line">
+                            <strong>{entry.kind}</strong>
+                            <span>{entry.status}</span>
+                          </div>
+                          <div className="history-line muted">
+                            <span>
+                              {entry.timestamp
+                                ? formatTimestamp(entry.timestamp)
+                                : "Pending"}
+                            </span>
+                            <span>
+                              {primaryAmount
+                                ? `${primaryAmount.delta.startsWith("-") ? "" : "+"}${formatMon(
+                                    BigInt(primaryAmount.delta),
+                                  )} MON`
+                                : "Vault update"}
+                            </span>
+                          </div>
+                        </div>
                       </div>
-                      <div className="history-line muted">
-                        <span>
-                          {entry.timestamp
-                            ? formatTimestamp(entry.timestamp)
-                            : "Pending"}
-                        </span>
-                        <span>
-                          {entry.amounts[0]
-                            ? `${entry.amounts[0].delta.startsWith("-") ? "" : "+"}${formatMon(
-                                BigInt(entry.amounts[0].delta),
-                              )} MON`
-                            : "Vault update"}
-                        </span>
-                      </div>
-                    </div>
-                  ))
+                    );
+                  })
                 )}
               </div>
+              {hiddenHistoryCount > 0 ? (
+                <button
+                  type="button"
+                  className="secondary-button history-toggle"
+                  aria-expanded={showAllHistory}
+                  onClick={() => {
+                    setShowAllHistory((current) => !current);
+                  }}
+                >
+                  {showAllHistory ? "Show less" : `Show ${hiddenHistoryCount} more`}
+                </button>
+              ) : null}
             </div>
           </section>
 
@@ -772,10 +803,15 @@ export default function App() {
                 className="primary-button"
                 disabled={!privyReady}
                 onClick={() => {
+                  if (authenticated) {
+                    linkWallet();
+                    return;
+                  }
+
                   connectOrCreateWallet();
                 }}
               >
-                {authenticated ? "Open Privy" : "Connect Privy"}
+                {authenticated ? "Link Wallet" : "Connect Privy"}
               </button>
               {authenticated ? (
                 <button
@@ -791,7 +827,10 @@ export default function App() {
             </div>
 
             <div className="subsection">
-              <div className="subsection-title">Assets</div>
+              <div className="subsection-title-row">
+                <div className="subsection-title">Assets</div>
+                <InfoTooltip label="Assets note" text={assetsTooltip} align="start" />
+              </div>
               <div className="asset-list">
                 {privyAssets.map((asset) => (
                   <div key={asset.symbol} className="asset-row">
@@ -803,13 +842,6 @@ export default function App() {
                   </div>
                 ))}
               </div>
-              <p className="muted-line">
-                {embeddedWallet
-                  ? loadingPrivyAssets
-                    ? "Refreshing balances..."
-                    : "Tracked balances refresh every 30 seconds."
-                  : "Connect Privy to view MON and USDC balances."}
-              </p>
             </div>
           </section>
         </aside>
@@ -1018,11 +1050,7 @@ export default function App() {
           </section>
 
           <section className="card trade-ticket">
-            <SectionTitle title="Fast limit order" />
-            <p className="muted-line ticket-copy">
-              Orders are signed by the Privy embedded wallet so the public side stays
-              one tap.
-            </p>
+            <SectionTitle title="Fast limit order" note={tradeTicketTooltip} />
 
             <div className="ticket-grid">
               <div className="form-stack">
@@ -1092,11 +1120,7 @@ export default function App() {
                   {compactSignature(lastSignedOrder.signature)}
                 </div>
               </div>
-            ) : (
-              <p className="muted-line">
-                Signed order intents stay local until you wire a matching execution API.
-              </p>
-            )}
+            ) : null}
           </section>
         </aside>
       </main>
@@ -1104,10 +1128,11 @@ export default function App() {
   );
 }
 
-function SectionTitle({ title }: { title: string }) {
+function SectionTitle({ note, title }: { note?: string; title: string }) {
   return (
     <div className="section-title">
       <strong>{title}</strong>
+      {note ? <InfoTooltip label={`${title} note`} text={note} /> : null}
     </div>
   );
 }
@@ -1148,6 +1173,47 @@ function WalletSummaryMeta({
     >
       <span className="wallet-summary-meta">{compactAddress(value)}</span>
     </button>
+  );
+}
+
+function InfoTooltip({
+  align = "end",
+  label,
+  text,
+}: {
+  align?: "end" | "start";
+  label: string;
+  text: string;
+}) {
+  return (
+    <span className="tooltip-wrap">
+      <button type="button" className="tooltip-trigger" aria-label={label}>
+        i
+      </button>
+      <span
+        className={`tooltip-bubble${align === "start" ? " tooltip-bubble-start" : ""}`}
+        role="tooltip"
+      >
+        {text}
+      </span>
+    </span>
+  );
+}
+
+function HistoryDirectionIcon({
+  direction,
+}: {
+  direction: "inbound" | "outbound";
+}) {
+  const path =
+    direction === "outbound" ? "M3 13L13 3M8 3h5v5" : "M13 3L3 13M3 8v5h5";
+
+  return (
+    <span className={`history-direction ${direction}`} aria-hidden="true">
+      <svg viewBox="0 0 16 16" focusable="false">
+        <path d={path} />
+      </svg>
+    </span>
   );
 }
 
@@ -1194,6 +1260,27 @@ function StatBlock({ label, value }: { label: string; value: string }) {
 
 function apiUrl(pathname: string): string {
   return `${API_BASE_URL}${pathname}`;
+}
+
+function getHistoryDirection(entry: {
+  amounts: Array<{ delta: string }>;
+  kind: string;
+}): "inbound" | "outbound" {
+  const primaryAmount = entry.amounts[0];
+  if (primaryAmount) {
+    return primaryAmount.delta.startsWith("-") ? "outbound" : "inbound";
+  }
+
+  const normalizedKind = entry.kind.toLowerCase();
+  if (
+    normalizedKind.includes("send") ||
+    normalizedKind.includes("withdraw") ||
+    normalizedKind.includes("out")
+  ) {
+    return "outbound";
+  }
+
+  return "inbound";
 }
 
 function parseMon(value: string): bigint {
