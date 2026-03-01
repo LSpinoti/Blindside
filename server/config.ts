@@ -39,7 +39,7 @@ export function getServerConfig(): BlindsideServerConfig {
         ticker: "Crypto.ETH/USD",
         feedId:
           "ff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace",
-        accent: "#2563eb",
+        accent: "#627eea",
       },
       {
         id: "sol-24h",
