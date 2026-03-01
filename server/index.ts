@@ -138,18 +138,32 @@ app.get("/api/price-board", async (_req, res) => {
   }
 });
 
-app.listen(config.port, () => {
-  console.log(
-    `Blindside API listening on http://localhost:${config.port} (Monad RPC: ${config.rpcUrl})`,
-  );
-});
+let backgroundServicesStarted = false;
 
-startAutoResolver();
+export function startBackgroundServices(): void {
+  if (backgroundServicesStarted) {
+    return;
+  }
 
-if (demoLiquidityEnabled) {
-  startDemoLiquidityService(config);
-} else {
+  backgroundServicesStarted = true;
+  startAutoResolver();
+
+  if (demoLiquidityEnabled) {
+    startDemoLiquidityService(config);
+    return;
+  }
+
   console.log("Blindside demo liquidity disabled (BLINDSIDE_ENABLE_DEMO_LIQUIDITY=0).");
+}
+
+export function startStandaloneServer(): void {
+  app.listen(config.port, () => {
+    console.log(
+      `Blindside API listening on http://localhost:${config.port} (Monad RPC: ${config.rpcUrl})`,
+    );
+  });
+
+  startBackgroundServices();
 }
 
 async function buildPriceBoardMarket(
@@ -561,3 +575,5 @@ async function fetchTimedPythPayload(
 function normalizePythPrice(price: string, expo: number): number {
   return Number(price) * 10 ** expo;
 }
+
+export default app;

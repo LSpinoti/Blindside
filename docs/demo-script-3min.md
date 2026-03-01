@@ -4,13 +4,13 @@ Estimated runtime: about 3 minutes
 
 ## Script
 
-Today I am showing **Blindside**, a private prediction market terminal built on **Monad testnet**. Before the product itself, the motivation is important: a professional trader may need to protect an active strategy, a founder or executive may need to avoid signaling, a treasury manager may need to keep risk exposure private, and any high-visibility operator may need to avoid leaking every move on a public ledger.
+Today I am demoing **Blindside**, a private prediction market terminal built on **Monad testnet**. Before the product itself, the motivation is important: a professional trader may need to protect an active strategy, a founder or executive may need to avoid signaling, a treasury manager may need to keep risk exposure private, and any high-visibility operator may need to avoid leaking every move on a public ledger.
 
 The core idea is simple: we want the speed of onchain trading, but without forcing the user's primary public wallet to be the wallet that visibly interacts with the market.
 
 The flow starts with a normal **MetaMask** wallet. That is the familiar wallet the user already has, and in our product it acts as the public funding entry point, not the trading identity.
 
-From there, **Unlink** is the privacy vault. In this codebase, the user funds an **Unlink vault** from MetaMask first, and that is stronger than treating privacy as a simple pass-through layer. A pass-through layer can still leave a clearer visual connection between the input wallet and the output wallet. A vault model is better because value enters one private store first, and then funds can be withdrawn out to the execution wallet separately, which does more to hide the direct relationship between where funds came from and where they end up being used.
+From there, **Unlink** is the privacy vault. In this codebase, the user funds an **Unlink vault** from MetaMask first; that's stronger than treating privacy as a simple pass-through layer; a pass-through layer can still leave a clearer visual connection between the input wallet and the output wallet. A vault model is better because value enters one private store first, and then funds can be withdrawn out to the execution wallet separately, which does more to hide the direct relationship between where funds came from and where they end up being used.
 
 So the purpose of **Unlink** is not just to sit in the middle. It acts as a vault that breaks the obvious onchain linkage between the public MetaMask wallet and the identity-decoupled, public-facing wallet we use in the app. The user's main wallet is still how value enters the system, but it is not the wallet that has to become the visible trading identity.
 
