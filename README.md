@@ -7,20 +7,10 @@ Blindside is a private prediction market terminal for Monad testnet.
 - `BinaryPriceMarket` is the onchain settlement contract.
 - `Pyth` provides the MON/USD resolution payload.
 
-## Live deployment
+## Tracked deployments
 
-- `MAR 31 / 0.0210`: `0x719BfAdA8caA300A26adfe0eCf54bDF08E1B330E`
-- `APR 07 / 0.0235`: `0x17aF654E71AD3bD75d9D81A485a75Ee9dF87ec8A`
-- `APR 14 / 0.0260`: `0xc8c4DfEBBfCEFC8faaCD1dD4f11C22E0930ec8aF`
-
-Verification:
-
-- Mar 31:
-  https://testnet.monadvision.com/address/0x719BfAdA8caA300A26adfe0eCf54bDF08E1B330E
-- Apr 07:
-  https://testnet.monadvision.com/address/0x17aF654E71AD3bD75d9D81A485a75Ee9dF87ec8A
-- Apr 14:
-  https://testnet.monadvision.com/address/0xc8c4DfEBBfCEFC8faaCD1dD4f11C22E0930ec8aF
+The tracked BTC, ETH, SOL, and MON market addresses are written to
+`contracts/deployments/tracked-markets.json` whenever you run `pnpm deploy:market`.
 
 ## Local commands
 
@@ -28,7 +18,7 @@ Verification:
 pnpm dev
 pnpm build
 pnpm deploy:market
-pnpm resolve:market 0x719BfAdA8caA300A26adfe0eCf54bDF08E1B330E
+pnpm resolve:market <market-address>
 ```
 
 ## Services

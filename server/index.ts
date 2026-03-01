@@ -46,6 +46,11 @@ type PriceBoardMarket = {
   ticker: string;
   feedId: string;
   accent: string;
+  contractAddress: string;
+  question: string;
+  strikeE8: number;
+  cutoffTime: number;
+  pythAddress: string;
   currentPrice: number;
   targetPrice: number;
   highPrice: number;
@@ -185,6 +190,11 @@ async function buildPriceBoardMarket(
     ticker: asset.ticker,
     feedId: asset.feedId,
     accent: asset.accent,
+    contractAddress: asset.contractAddress,
+    question: asset.question,
+    strikeE8: asset.strikeE8,
+    cutoffTime: asset.cutoffTime,
+    pythAddress: asset.pythAddress,
     currentPrice: lastLive.close,
     targetPrice: firstLive.open,
     highPrice: liveCandles.reduce(

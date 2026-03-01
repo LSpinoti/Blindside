@@ -697,6 +697,30 @@ summary {
   font-size: 0.9rem;
 }
 
+.position-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.position-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px 11px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-strong);
+}
+
+.position-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  color: var(--text-soft);
+  font-size: 0.8rem;
+}
+
 .selected-card,
 .trade-card {
   display: flex;
@@ -872,6 +896,27 @@ summary {
   font-size: 0.94rem;
 }
 
+.market-contract-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding-top: 2px;
+  color: var(--text-soft);
+  font-size: 0.78rem;
+}
+
+.market-contract-row span {
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-faint);
+}
+
+.market-contract-row strong {
+  font-size: 0.78rem;
+  word-break: break-all;
+}
+
 .history-table,
 .orderbook {
   display: flex;
@@ -1004,6 +1049,26 @@ summary {
   background: var(--surface-strong);
 }
 
+.receipt-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.receipt-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.receipt-copy-button {
+  padding: 0;
+  color: var(--accent);
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
 .signature-preview {
   padding-top: 2px;
   color: var(--text-faint);
@@ -1062,6 +1127,7 @@ summary {
   .selected-stats,
   .market-metrics,
   .trade-stats,
+  .position-grid,
   .ticket-grid,
   .ticket-actions,
   .wallet-actions,

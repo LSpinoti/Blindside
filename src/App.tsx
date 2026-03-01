@@ -5,9 +5,17 @@ import {
   useWallets,
 } from "@privy-io/react-auth";
 import { useUnlink, useUnlinkHistory } from "@unlink-xyz/react";
-import { createPublicClient, formatUnits, http, parseAbi } from "viem";
+import {
+  createPublicClient,
+  encodeFunctionData,
+  formatUnits,
+  http,
+  isAddress,
+  parseAbi,
+} from "viem";
 
 import { PriceChart } from "./components/PriceChart";
+import { binaryPriceMarketAbi } from "./lib/abi";
 import {
   API_BASE_URL,
   MONAD_CHAIN_ID,
@@ -27,6 +35,11 @@ type PriceBoardMarket = {
   ticker: string;
   feedId: string;
   accent: string;
+  contractAddress: string;
+  question: string;
+  strikeE8: number;
+  cutoffTime: number;
+  pythAddress: string;
   currentPrice: number;
   targetPrice: number;
   highPrice: number;
@@ -53,20 +66,42 @@ type PriceBoardResponse = {
 };
 
 type OrderBookLevel = {
-  price: number;
-  size: number;
+  priceBps: number;
+  sizeWei: bigint;
 };
 
-type SignedOrderTicket = {
+type MarketDepthSnapshot = {
+  bids: OrderBookLevel[];
+  asks: OrderBookLevel[];
+  bestBidBps: number | null;
+  bestAskBps: number | null;
+  yesPoolWei: bigint;
+  noPoolWei: bigint;
+};
+
+type SubmittedOrderTicket = {
   id: string;
   marketId: string;
   marketLabel: string;
   side: "YES" | "NO";
   limitPrice: number;
-  size: number;
+  amountWei: bigint;
   submittedAt: number;
   walletAddress: string;
-  signature: string;
+  txHash: string;
+};
+
+type WalletMarketPosition = {
+  marketId: string;
+  marketLabel: string;
+  contractAddress: string;
+  yesAmountWei: bigint;
+  noAmountWei: bigint;
+  claimableWei: bigint;
+  openYesWei: bigint;
+  openNoWei: bigint;
+  totalLockedWei: bigint;
+  alreadyClaimed: boolean;
 };
 
 type WalletAsset = {
@@ -130,7 +165,6 @@ export default function App() {
     linkWallet,
     logout,
     ready: privyReady,
-    signMessage,
   } = usePrivy();
   const { ready: walletsReady, wallets } = useWallets();
 
@@ -142,7 +176,7 @@ export default function App() {
   const [withdrawAmount, setWithdrawAmount] = useState("0.25");
   const [importText, setImportText] = useState("");
   const [limitPrice, setLimitPrice] = useState("0.58");
-  const [orderSize, setOrderSize] = useState("25");
+  const [orderSize, setOrderSize] = useState("0.25");
   const [walletWorking, setWalletWorking] = useState(false);
   const [tradeWorking, setTradeWorking] = useState(false);
   const [walletError, setWalletError] = useState("");
@@ -150,13 +184,16 @@ export default function App() {
   const [tradeError, setTradeError] = useState("");
   const [tradeStatus, setTradeStatus] = useState("");
   const [loadingPrivyAssets, setLoadingPrivyAssets] = useState(false);
+  const [loadingPositions, setLoadingPositions] = useState(false);
   const [privyAssets, setPrivyAssets] = useState<WalletAsset[]>(() =>
     buildDefaultWalletAssets(),
   );
-  const [showAllHistory, setShowAllHistory] = useState(false);
-  const [lastSignedOrder, setLastSignedOrder] = useState<SignedOrderTicket | null>(
-    null,
+  const [marketDepth, setMarketDepth] = useState<Record<string, MarketDepthSnapshot>>(
+    {},
   );
+  const [walletPositions, setWalletPositions] = useState<WalletMarketPosition[]>([]);
+  const [showAllHistory, setShowAllHistory] = useState(false);
+  const [recentOrders, setRecentOrders] = useState<SubmittedOrderTicket[]>([]);
   const [copyToast, setCopyToast] = useState<CopyToast | null>(null);
 
   useEffect(() => {
@@ -178,7 +215,7 @@ export default function App() {
 
     const timer = window.setInterval(() => {
       void loadBoard(false);
-    }, 1000);
+    }, 10000);
 
     return () => {
       window.clearInterval(timer);
@@ -195,17 +232,30 @@ export default function App() {
     board?.markets.find((market) => market.id === selectedMarketId) ??
     board?.markets[0] ??
     null;
+  const marketIdsKey =
+    board?.markets
+      .map((market) => `${market.id}:${market.contractAddress}`)
+      .join("|") ?? "";
 
   useEffect(() => {
     if (!selectedMarket) {
       return;
     }
 
-    setLimitPrice(formatProbability(computeImpliedYesPrice(selectedMarket)));
+    setLimitPrice(
+      formatProbability(
+        computeSuggestedLimitPrice(
+          selectedMarket,
+          marketDepth[selectedMarket.id] ?? null,
+        ),
+      ),
+    );
   }, [selectedMarketId]);
 
   const embeddedWallet = getEmbeddedWallet(wallets);
-  const orderBook = selectedMarket ? buildOrderBook(selectedMarket) : null;
+  const selectedDepth = selectedMarket
+    ? marketDepth[selectedMarket.id] ?? createEmptyMarketDepth()
+    : null;
   const vaultBalance = balances[MON_NATIVE_TOKEN.toLowerCase()] ?? 0n;
   const totalPendingJobs = pendingDeposits.length + pendingWithdrawals.length;
   const unlinkSummary = summarizeUnlinkVault(
@@ -224,10 +274,11 @@ export default function App() {
       : "Tracked balances refresh every 30 seconds."
     : "Connect Privy to view MON and USDC balances.";
   const tradeTicketTooltip =
-    "Orders are signed by the Privy embedded wallet so the public side stays one tap. Signed order intents stay local until you wire a matching execution API.";
+    "Orders post directly to the selected market contract in MON. The transaction hash is stored below after each submission.";
   const isHistoryBootstrapping = historyLoading && history.length === 0;
   const visibleHistory = showAllHistory ? history : history.slice(0, 2);
   const hiddenHistoryCount = Math.max(history.length - 2, 0);
+  const visibleWalletPositions = walletPositions.filter(hasVisiblePosition);
 
   useEffect(() => {
     if (!embeddedWallet) {
@@ -265,6 +316,73 @@ export default function App() {
     };
   }, [embeddedWallet?.address]);
 
+  useEffect(() => {
+    if (!board?.markets.length) {
+      setMarketDepth({});
+      return;
+    }
+
+    let cancelled = false;
+
+    const refreshDepth = async () => {
+      const nextDepth = await loadMarketDepth(board.markets);
+      if (!cancelled) {
+        setMarketDepth(nextDepth);
+      }
+    };
+
+    void refreshDepth();
+
+    const timer = window.setInterval(() => {
+      void refreshDepth();
+    }, 6000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [marketIdsKey]);
+
+  useEffect(() => {
+    if (!embeddedWallet || !board?.markets.length) {
+      setWalletPositions([]);
+      setLoadingPositions(false);
+      return;
+    }
+
+    let cancelled = false;
+
+    const refreshPositions = async () => {
+      setLoadingPositions(true);
+
+      try {
+        const nextPositions = await loadWalletPositionsForAddress(
+          embeddedWallet.address,
+          board.markets,
+        );
+
+        if (!cancelled) {
+          setWalletPositions(nextPositions);
+        }
+      } finally {
+        if (!cancelled) {
+          setLoadingPositions(false);
+        }
+      }
+    };
+
+    void refreshPositions();
+
+    const timer = window.setInterval(() => {
+      void refreshPositions();
+    }, 10000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [embeddedWallet?.address, marketIdsKey]);
+
   async function loadPrivyAssets(address: string): Promise<WalletAsset[]> {
     const walletAddress = address as `0x${string}`;
 
@@ -294,6 +412,121 @@ export default function App() {
             label: asset.label,
             balance: "Unavailable",
           };
+        }
+      }),
+    );
+  }
+
+  async function loadMarketDepth(
+    markets: PriceBoardMarket[],
+  ): Promise<Record<string, MarketDepthSnapshot>> {
+    const entries = await Promise.all(
+      markets.map(async (market): Promise<[string, MarketDepthSnapshot]> => {
+        if (!isLiveContractAddress(market.contractAddress)) {
+          return [market.id, createEmptyMarketDepth()];
+        }
+
+        try {
+          const [yesPoolWei, noPoolWei, orderBook] = await Promise.all([
+            monadPublicClient.readContract({
+              address: market.contractAddress as `0x${string}`,
+              abi: binaryPriceMarketAbi,
+              functionName: "yesPool",
+            }),
+            monadPublicClient.readContract({
+              address: market.contractAddress as `0x${string}`,
+              abi: binaryPriceMarketAbi,
+              functionName: "noPool",
+            }),
+            monadPublicClient.readContract({
+              address: market.contractAddress as `0x${string}`,
+              abi: binaryPriceMarketAbi,
+              functionName: "getOrderBook",
+            }),
+          ]);
+
+          const [bidPrices, bidSizes, askPrices, askSizes] = orderBook;
+
+          return [
+            market.id,
+            {
+              bids: buildBookSide(
+                Array.from(bidPrices, (value) => Number(value)),
+                Array.from(bidSizes),
+              ),
+              asks: buildBookSide(
+                Array.from(askPrices, (value) => Number(value)),
+                Array.from(askSizes),
+              ),
+              bestBidBps: firstActivePrice(Array.from(bidPrices, (value) => Number(value))),
+              bestAskBps: firstActivePrice(Array.from(askPrices, (value) => Number(value))),
+              yesPoolWei,
+              noPoolWei,
+            },
+          ];
+        } catch {
+          return [market.id, createEmptyMarketDepth()];
+        }
+      }),
+    );
+
+    return Object.fromEntries(entries);
+  }
+
+  async function loadWalletPositionsForAddress(
+    address: string,
+    markets: PriceBoardMarket[],
+  ): Promise<WalletMarketPosition[]> {
+    return Promise.all(
+      markets.map(async (market) => {
+        const emptyPosition: WalletMarketPosition = {
+          marketId: market.id,
+          marketLabel: market.displaySymbol,
+          contractAddress: market.contractAddress,
+          yesAmountWei: 0n,
+          noAmountWei: 0n,
+          claimableWei: 0n,
+          openYesWei: 0n,
+          openNoWei: 0n,
+          totalLockedWei: 0n,
+          alreadyClaimed: false,
+        };
+
+        if (!isLiveContractAddress(market.contractAddress)) {
+          return emptyPosition;
+        }
+
+        try {
+          const [position, openOrders] = await Promise.all([
+            monadPublicClient.readContract({
+              address: market.contractAddress as `0x${string}`,
+              abi: binaryPriceMarketAbi,
+              functionName: "positionOf",
+              args: [address as `0x${string}`],
+            }),
+            monadPublicClient.readContract({
+              address: market.contractAddress as `0x${string}`,
+              abi: binaryPriceMarketAbi,
+              functionName: "openOrderSummaryOf",
+              args: [address as `0x${string}`],
+            }),
+          ]);
+
+          const [yesAmountWei, noAmountWei, alreadyClaimed, claimableWei] = position;
+          const [openYesWei, openNoWei, totalLockedWei] = openOrders;
+
+          return {
+            ...emptyPosition,
+            yesAmountWei,
+            noAmountWei,
+            claimableWei,
+            openYesWei,
+            openNoWei,
+            totalLockedWei,
+            alreadyClaimed,
+          };
+        } catch {
+          return emptyPosition;
         }
       }),
     );
@@ -487,6 +720,11 @@ export default function App() {
     if (!selectedMarket) {
       return;
     }
+    if (!isLiveContractAddress(selectedMarket.contractAddress)) {
+      setTradeError("The selected market has not been deployed yet.");
+      setTradeStatus("");
+      return;
+    }
 
     if (!privyReady || !walletsReady) {
       setTradeError("");
@@ -502,7 +740,7 @@ export default function App() {
     }
 
     const parsedLimit = Number.parseFloat(limitPrice);
-    const parsedSize = Number.parseFloat(orderSize);
+    const collateralWei = parseMon(orderSize);
 
     if (!Number.isFinite(parsedLimit) || parsedLimit <= 0 || parsedLimit >= 1) {
       setTradeError("Limit price must be between 0.01 and 0.99.");
@@ -510,8 +748,8 @@ export default function App() {
       return;
     }
 
-    if (!Number.isFinite(parsedSize) || parsedSize <= 0) {
-      setTradeError("Order size must be greater than 0.");
+    if (collateralWei <= 0n) {
+      setTradeError("Order size must be greater than 0 MON.");
       setTradeStatus("");
       return;
     }
@@ -519,33 +757,69 @@ export default function App() {
     try {
       setTradeWorking(true);
       setTradeError("");
+      setTradeStatus("");
+
+      const normalizedLimit = roundProbability(parsedLimit);
+      const limitPriceBps = Math.round(normalizedLimit * 100);
+
+      await embeddedWallet.switchChain(MONAD_CHAIN_ID);
+      const provider = await embeddedWallet.getEthereumProvider();
+
+      const txHash = (await provider.request({
+        method: "eth_sendTransaction",
+        params: [
+          {
+            to: selectedMarket.contractAddress,
+            from: embeddedWallet.address,
+            data: encodeFunctionData({
+              abi: binaryPriceMarketAbi,
+              functionName: "placeLimitOrder",
+              args: [side === "YES", limitPriceBps],
+            }),
+            value: toHexValue(collateralWei),
+          },
+        ],
+      })) as string;
 
       const baseTicket = {
         id: `${selectedMarket.id}-${side}-${Date.now()}`,
         marketId: selectedMarket.id,
         marketLabel: selectedMarket.displaySymbol,
         side,
-        limitPrice: roundProbability(parsedLimit),
-        size: Math.round(parsedSize * 100) / 100,
+        limitPrice: normalizedLimit,
+        amountWei: collateralWei,
         submittedAt: Date.now(),
         walletAddress: embeddedWallet.address,
+        txHash,
       };
 
-      const { signature } = await signMessage(
-        { message: buildOrderMessage(baseTicket) },
-        { address: embeddedWallet.address },
+      setRecentOrders((current) => [baseTicket, ...current].slice(0, 6));
+      setTradeStatus(
+        `${side} order submitted to ${compactAddress(selectedMarket.contractAddress)}.`,
       );
 
-      setLastSignedOrder({
-        ...baseTicket,
-        signature,
-      });
-      setTradeStatus(
-        `${side} limit signed by ${compactAddress(embeddedWallet.address)} and staged locally.`,
-      );
+      void monadPublicClient
+        .waitForTransactionReceipt({
+          hash: txHash as `0x${string}`,
+        })
+        .then(async () => {
+          if (board?.markets.length) {
+            setMarketDepth(await loadMarketDepth(board.markets));
+          }
+
+          if (embeddedWallet.address && board?.markets.length) {
+            setWalletPositions(
+              await loadWalletPositionsForAddress(
+                embeddedWallet.address,
+                board.markets,
+              ),
+            );
+          }
+        })
+        .catch(() => undefined);
     } catch (placeError) {
       setTradeError(
-        placeError instanceof Error ? placeError.message : "Order signing failed.",
+        placeError instanceof Error ? placeError.message : "Order submission failed.",
       );
       setTradeStatus("");
     } finally {
@@ -843,6 +1117,40 @@ export default function App() {
                 ))}
               </div>
             </div>
+
+            <div className="subsection">
+              <div className="subsection-title">Current positions</div>
+              {!embeddedWallet ? (
+                <p className="muted-line">Connect Privy to load onchain positions.</p>
+              ) : loadingPositions ? (
+                <p className="muted-line">Refreshing positions...</p>
+              ) : visibleWalletPositions.length === 0 ? (
+                <p className="muted-line">No positions or resting orders yet.</p>
+              ) : (
+                <div className="position-list">
+                  {visibleWalletPositions.map((position) => (
+                    <div key={position.marketId} className="position-card">
+                      <div className="history-line">
+                        <strong>{position.marketLabel}</strong>
+                        <span>{compactAddress(position.contractAddress)}</span>
+                      </div>
+                      <div className="position-grid">
+                        <span>YES {formatMonCompact(position.yesAmountWei)} MON</span>
+                        <span>NO {formatMonCompact(position.noAmountWei)} MON</span>
+                        <span>Open YES {formatMonCompact(position.openYesWei)} MON</span>
+                        <span>Open NO {formatMonCompact(position.openNoWei)} MON</span>
+                        <span>
+                          Locked {formatMonCompact(position.totalLockedWei)} MON
+                        </span>
+                        <span>
+                          Claimable {formatMonCompact(position.claimableWei)} MON
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </section>
         </aside>
 
@@ -974,6 +1282,11 @@ export default function App() {
                     ))
                   )}
                 </div>
+
+                <div className="market-contract-row">
+                  <span>Contract</span>
+                  <strong>{formatContractLabel(market.contractAddress)}</strong>
+                </div>
               </button>
             ))}
           </section>
@@ -999,50 +1312,61 @@ export default function App() {
               ) : null}
             </div>
 
-            {selectedMarket && orderBook ? (
+            {selectedMarket && selectedDepth ? (
               <>
                 <div className="trade-stats">
                   <StatBlock
-                    label="YES mid"
-                    value={formatProbability(orderBook.mid)}
+                    label="YES pool"
+                    value={`${formatMonCompact(selectedDepth.yesPoolWei)} MON`}
                   />
                   <StatBlock
-                    label="NO mid"
-                    value={formatProbability(1 - orderBook.mid)}
+                    label="NO pool"
+                    value={`${formatMonCompact(selectedDepth.noPoolWei)} MON`}
                   />
                   <StatBlock
-                    label="Resolve"
-                    value={formatTimestamp(selectedMarket.targetTimestamp)}
+                    label="Best YES bid"
+                    value={formatPriceFromBps(selectedDepth.bestBidBps)}
                   />
                   <StatBlock
-                    label="Current"
-                    value={formatUsd(selectedMarket.currentPrice)}
+                    label="Best YES ask"
+                    value={formatPriceFromBps(selectedDepth.bestAskBps)}
                   />
                 </div>
 
-                <div className="orderbook">
-                  <div className="book-header-row">
-                    <span>Bid YES</span>
-                    <span>Size</span>
-                    <span>Ask YES</span>
-                    <span>Size</span>
+                {isLiveContractAddress(selectedMarket.contractAddress) ? (
+                  <div className="orderbook">
+                    <div className="book-header-row">
+                      <span>Bid YES</span>
+                      <span>Size</span>
+                      <span>Ask YES</span>
+                      <span>Size</span>
+                    </div>
+                    {selectedDepth.bids.map((bid, index) => {
+                      const ask = selectedDepth.asks[index];
+                      return (
+                        <div
+                          key={`${selectedMarket.id}-${index}`}
+                          className="book-row"
+                        >
+                          <span className="book-price bid">
+                            {formatLevelPrice(bid.priceBps)}
+                          </span>
+                          <span>{formatMonCompact(bid.sizeWei)}</span>
+                          <span className="book-price ask">
+                            {formatLevelPrice(ask.priceBps)}
+                          </span>
+                          <span>{formatMonCompact(ask.sizeWei)}</span>
+                        </div>
+                      );
+                    })}
+                    <div className="midpoint-row">
+                      Spread {formatPriceFromBps(selectedDepth.bestBidBps)} /{" "}
+                      {formatPriceFromBps(selectedDepth.bestAskBps)}
+                    </div>
                   </div>
-                  {orderBook.bids.map((bid, index) => {
-                    const ask = orderBook.asks[index];
-                    return (
-                      <div key={`${bid.price}-${ask.price}`} className="book-row">
-                        <span className="book-price bid">{formatProbability(bid.price)}</span>
-                        <span>{formatContracts(bid.size)}</span>
-                        <span className="book-price ask">{formatProbability(ask.price)}</span>
-                        <span>{formatContracts(ask.size)}</span>
-                      </div>
-                    );
-                  })}
-                  <div className="midpoint-row">
-                    Midpoint YES {formatProbability(orderBook.mid)} / NO{" "}
-                    {formatProbability(1 - orderBook.mid)}
-                  </div>
-                </div>
+                ) : (
+                  <p className="muted-line">Deploy this market to view live depth.</p>
+                )}
               </>
             ) : (
               <p className="muted-line">Select a market to view liquidity.</p>
@@ -1064,7 +1388,7 @@ export default function App() {
                 />
               </div>
               <div className="form-stack">
-                <label className="field-label">Order size</label>
+                <label className="field-label">Order size (MON)</label>
                 <input
                   className="terminal-input"
                   value={orderSize}
@@ -1084,7 +1408,7 @@ export default function App() {
                   void handlePlaceOrder("YES");
                 }}
               >
-                {tradeWorking ? "Signing..." : "Place YES"}
+                {tradeWorking ? "Posting..." : "Place YES"}
               </button>
               <button
                 type="button"
@@ -1094,31 +1418,46 @@ export default function App() {
                   void handlePlaceOrder("NO");
                 }}
               >
-                {tradeWorking ? "Signing..." : "Place NO"}
+                {tradeWorking ? "Posting..." : "Place NO"}
               </button>
             </div>
 
             {tradeError ? <p className="error-text">{tradeError}</p> : null}
             {tradeStatus ? <p className="muted-line">{tradeStatus}</p> : null}
 
-            {lastSignedOrder ? (
-              <div className="ticket-receipt">
-                <div className="history-line">
-                  <strong>
-                    {lastSignedOrder.side} {lastSignedOrder.marketLabel}
-                  </strong>
-                  <span>{formatTimestamp(lastSignedOrder.submittedAt)}</span>
-                </div>
-                <div className="history-line muted">
-                  <span>
-                    {formatProbability(lastSignedOrder.limitPrice)} x{" "}
-                    {formatContracts(lastSignedOrder.size)}
-                  </span>
-                  <span>{compactAddress(lastSignedOrder.walletAddress)}</span>
-                </div>
-                <div className="signature-preview">
-                  {compactSignature(lastSignedOrder.signature)}
-                </div>
+            {recentOrders.length > 0 ? (
+              <div className="receipt-list">
+                {recentOrders.map((order) => (
+                  <div key={order.id} className="ticket-receipt">
+                    <div className="history-line">
+                      <strong>
+                        {order.side} {order.marketLabel}
+                      </strong>
+                      <span>{formatTimestamp(order.submittedAt)}</span>
+                    </div>
+                    <div className="history-line muted">
+                      <span>
+                        {formatProbability(order.limitPrice)} x{" "}
+                        {formatMonCompact(order.amountWei)} MON
+                      </span>
+                      <span>{compactAddress(order.walletAddress)}</span>
+                    </div>
+                    <div className="receipt-actions">
+                      <span className="signature-preview">
+                        Tx {compactTxHash(order.txHash)}
+                      </span>
+                      <button
+                        type="button"
+                        className="wallet-summary-button receipt-copy-button"
+                        onClick={() => {
+                          handleCopyAddress("Transaction id", order.txHash);
+                        }}
+                      >
+                        Copy tx id
+                      </button>
+                    </div>
+                  </div>
+                ))}
               </div>
             ) : null}
           </section>
@@ -1284,7 +1623,12 @@ function getHistoryDirection(entry: {
 }
 
 function parseMon(value: string): bigint {
-  const [wholeRaw, fracRaw = ""] = value.trim().split(".");
+  const normalized = value.trim();
+  if (!/^\d*(\.\d*)?$/.test(normalized)) {
+    return 0n;
+  }
+
+  const [wholeRaw, fracRaw = ""] = normalized.split(".");
   const whole = wholeRaw === "" ? "0" : wholeRaw;
   const fraction = `${fracRaw}000000000000000000`.slice(0, 18);
   return BigInt(whole) * 10n ** 18n + BigInt(fraction || "0");
@@ -1326,10 +1670,10 @@ function formatProbability(value: number): string {
   return roundProbability(value).toFixed(2);
 }
 
-function formatContracts(value: number): string {
-  return new Intl.NumberFormat(undefined, {
-    maximumFractionDigits: value >= 100 ? 0 : 2,
-  }).format(value);
+function formatMonCompact(amount: bigint): string {
+  const [whole, fraction = ""] = formatMon(amount).split(".");
+  const trimmed = fraction.replace(/0+$/, "");
+  return trimmed ? `${whole}.${trimmed}` : whole;
 }
 
 function formatMarketSubtitle(asset: string): string {
@@ -1359,12 +1703,32 @@ function compactAddress(value: string): string {
   return `${value.slice(0, 6)}...${value.slice(-4)}`;
 }
 
-function compactSignature(value: string): string {
+function compactTxHash(value: string): string {
   if (!value || value.length < 18) {
     return value;
   }
 
   return `${value.slice(0, 10)}...${value.slice(-8)}`;
+}
+
+function formatContractLabel(value: string): string {
+  return isLiveContractAddress(value) ? value : "Pending deploy";
+}
+
+function formatPriceFromBps(value: number | null): string {
+  if (!value) {
+    return "--";
+  }
+
+  return (value / 100).toFixed(2);
+}
+
+function formatLevelPrice(value: number): string {
+  if (value <= 0) {
+    return "--";
+  }
+
+  return (value / 100).toFixed(2);
 }
 
 function buildDefaultWalletAssets(): WalletAsset[] {
@@ -1420,33 +1784,35 @@ function getEmbeddedWallet(wallets: ConnectedWallet[]) {
   );
 }
 
-function buildOrderBook(market: PriceBoardMarket) {
-  const mid = computeImpliedYesPrice(market);
-  const bids = createBookLevels(mid, -1, Math.abs(market.movePct));
-  const asks = createBookLevels(mid, 1, Math.abs(market.movePct));
-
+function createEmptyMarketDepth(): MarketDepthSnapshot {
   return {
-    bids,
-    asks,
-    mid,
+    bids: Array.from({ length: 4 }, () => ({ priceBps: 0, sizeWei: 0n })),
+    asks: Array.from({ length: 4 }, () => ({ priceBps: 0, sizeWei: 0n })),
+    bestBidBps: null,
+    bestAskBps: null,
+    yesPoolWei: 0n,
+    noPoolWei: 0n,
   };
 }
 
-function createBookLevels(
-  midpoint: number,
-  direction: -1 | 1,
-  moveMagnitude: number,
+function buildBookSide(
+  prices: number[],
+  sizes: bigint[],
 ): OrderBookLevel[] {
-  return Array.from({ length: 4 }, (_, index) => {
-    const distance = 0.02 + index * 0.015;
-    const rawPrice = midpoint + distance * direction;
-    const depthBase = 140 - index * 18 + moveMagnitude * 5;
+  return Array.from({ length: 4 }, (_, index) => ({
+    priceBps: prices[index] ?? 0,
+    sizeWei: sizes[index] ?? 0n,
+  }));
+}
 
-    return {
-      price: roundProbability(rawPrice),
-      size: Math.max(8, Math.round(depthBase)),
-    };
-  });
+function firstActivePrice(levels: number[]): number | null {
+  for (const level of levels) {
+    if (level > 0) {
+      return level;
+    }
+  }
+
+  return null;
 }
 
 function computeImpliedYesPrice(market: PriceBoardMarket): number {
@@ -1458,23 +1824,36 @@ function computeImpliedYesPrice(market: PriceBoardMarket): number {
   return roundProbability(0.5 + relativeDrift * 2.4 + (market.movePct / 100) * 1.8);
 }
 
+function computeSuggestedLimitPrice(
+  market: PriceBoardMarket,
+  depth: MarketDepthSnapshot | null,
+): number {
+  if (depth?.bestBidBps && depth.bestAskBps) {
+    return roundProbability((depth.bestBidBps + depth.bestAskBps) / 200);
+  }
+
+  return computeImpliedYesPrice(market);
+}
+
 function roundProbability(value: number): number {
   return Math.min(0.99, Math.max(0.01, Math.round(value * 100) / 100));
 }
 
-function buildOrderMessage(
-  ticket: Omit<SignedOrderTicket, "signature">,
-): string {
-  return [
-    "BLINDSIDE LIMIT ORDER",
-    `market=${ticket.marketId}`,
-    `symbol=${ticket.marketLabel}`,
-    `side=${ticket.side}`,
-    `limit=${formatProbability(ticket.limitPrice)}`,
-    `size=${ticket.size}`,
-    `wallet=${ticket.walletAddress}`,
-    `timestamp=${new Date(ticket.submittedAt).toISOString()}`,
-  ].join("\n");
+function isLiveContractAddress(value: string): boolean {
+  return (
+    isAddress(value) &&
+    value.toLowerCase() !== "0x0000000000000000000000000000000000000000"
+  );
+}
+
+function hasVisiblePosition(position: WalletMarketPosition): boolean {
+  return (
+    position.yesAmountWei > 0n ||
+    position.noAmountWei > 0n ||
+    position.openYesWei > 0n ||
+    position.openNoWei > 0n ||
+    position.claimableWei > 0n
+  );
 }
 
 function formatTokenBalance(amount: bigint, decimals: number): string {

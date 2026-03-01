@@ -15,6 +15,23 @@ export const binaryPriceMarketAbi = [
   },
   {
     type: "function",
+    name: "placeLimitOrder",
+    stateMutability: "payable",
+    inputs: [
+      { name: "side", type: "bool" },
+      { name: "limitPriceBps", type: "uint8" },
+    ],
+    outputs: [{ name: "orderId", type: "uint64" }],
+  },
+  {
+    type: "function",
+    name: "cancelLimitOrder",
+    stateMutability: "nonpayable",
+    inputs: [{ name: "orderId", type: "uint64" }],
+    outputs: [],
+  },
+  {
+    type: "function",
     name: "claim",
     stateMutability: "nonpayable",
     inputs: [],
@@ -64,9 +81,44 @@ export const binaryPriceMarketAbi = [
   },
   {
     type: "function",
+    name: "positionOf",
+    stateMutability: "view",
+    inputs: [{ name: "burner", type: "address" }],
+    outputs: [
+      { name: "yesAmount", type: "uint256" },
+      { name: "noAmount", type: "uint256" },
+      { name: "alreadyClaimed", type: "bool" },
+      { name: "claimable", type: "uint256" },
+    ],
+  },
+  {
+    type: "function",
     name: "previewPayout",
     stateMutability: "view",
     inputs: [{ name: "burner", type: "address" }],
     outputs: [{ name: "", type: "uint256" }],
+  },
+  {
+    type: "function",
+    name: "openOrderSummaryOf",
+    stateMutability: "view",
+    inputs: [{ name: "trader", type: "address" }],
+    outputs: [
+      { name: "yesValue", type: "uint256" },
+      { name: "noValue", type: "uint256" },
+      { name: "totalLocked", type: "uint256" },
+    ],
+  },
+  {
+    type: "function",
+    name: "getOrderBook",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [
+      { name: "bidPrices", type: "uint8[4]" },
+      { name: "bidSizes", type: "uint256[4]" },
+      { name: "askPrices", type: "uint8[4]" },
+      { name: "askSizes", type: "uint256[4]" },
+    ],
   },
 ] as const;
