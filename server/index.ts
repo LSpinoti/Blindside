@@ -2,12 +2,23 @@ import "dotenv/config";
 
 import cors from "cors";
 import express from "express";
+import {
+  createPublicClient,
+  createWalletClient,
+  http,
+  isAddress,
+  parseAbi,
+  type Hex,
+} from "viem";
+import { privateKeyToAccount } from "viem/accounts";
+import { monadTestnet } from "viem/chains";
 
 import {
   buildTradingViewHistoryUrl,
   getServerConfig,
   type PriceBoardAssetConfig,
 } from "./config.js";
+import { startDemoLiquidityService } from "./demoLiquidity.js";
 
 type TradingViewHistoryResponse = {
   s: "ok" | "error" | "no_data";
@@ -20,6 +31,19 @@ type TradingViewHistoryResponse = {
   errmsg?: string;
 };
 
+type PythTimedResponse = {
+  binary: {
+    data: string[];
+  };
+  parsed: Array<{
+    price: {
+      price: string;
+      expo: number;
+      publish_time: number;
+    };
+  }>;
+};
+
 type Candle = {
   time: number;
   open: number;
@@ -30,7 +54,6 @@ type Candle = {
 
 type HistoricalResolution = {
   date: string;
-  label: string;
   targetPrice: number;
   settlePrice: number;
   high: number;
@@ -64,6 +87,22 @@ type PriceBoardMarket = {
 
 const app = express();
 const config = getServerConfig();
+const publicClient = createPublicClient({
+  chain: monadTestnet,
+  transport: http(config.rpcUrl),
+});
+const marketStateAbi = parseAbi([
+  "function cutoffTime() view returns (uint64)",
+  "function resolve(bytes[] updateData) payable",
+]);
+const pythAbi = parseAbi([
+  "function getUpdateFee(bytes[] updateData) view returns (uint256)",
+]);
+const settlingMarkets = new Set<string>();
+const demoLiquidityEnabled =
+  process.env.BLINDSIDE_ENABLE_DEMO_LIQUIDITY !== "0";
+const CUTOFF_CACHE_MS = 5_000;
+const cutoffCache = new Map<string, { value: number; expiresAt: number }>();
 
 app.use(cors());
 app.use(express.json());
@@ -78,7 +117,12 @@ app.get("/api/health", (_req, res) => {
 
 app.get("/api/price-board", async (_req, res) => {
   try {
-    const markets = await Promise.all(config.assets.map(buildPriceBoardMarket));
+    const cutoffTimes = await readLiveMarketCutoffs(config.assets);
+    const markets = await Promise.all(
+      config.assets.map((asset) =>
+        buildPriceBoardMarket(asset, cutoffTimes.get(asset.id) ?? null),
+      ),
+    );
 
     res.json({
       generatedAt: new Date().toISOString(),
@@ -100,50 +144,39 @@ app.listen(config.port, () => {
   );
 });
 
+startAutoResolver();
+
+if (demoLiquidityEnabled) {
+  startDemoLiquidityService(config);
+} else {
+  console.log("Blindside demo liquidity disabled (BLINDSIDE_ENABLE_DEMO_LIQUIDITY=0).");
+}
+
 async function buildPriceBoardMarket(
   asset: PriceBoardAssetConfig,
+  liveCutoffTime: number | null,
 ): Promise<PriceBoardMarket> {
-  const now = new Date();
-  const currentMidnight = Date.UTC(
-    now.getUTCFullYear(),
-    now.getUTCMonth(),
-    now.getUTCDate(),
-    0,
-    0,
-    0,
-    0,
-  );
-  const currentMidnightUnix = Math.floor(currentMidnight / 1000);
-  const startUnix = currentMidnightUnix - 3 * 24 * 60 * 60;
-  const endUnix = Math.floor(Date.now() / 1000);
+  const nowUnix = Math.floor(Date.now() / 1000);
+  const currentHourUnix = Math.floor(nowUnix / 3600) * 3600;
+  const startUnix = currentHourUnix - 8 * 60 * 60;
+  const cutoffTime = liveCutoffTime ?? nextHourlyCutoff(nowUnix);
+  const strikeTimestamp = cutoffTime - 60 * 60;
 
-  const response = await fetch(
-    buildTradingViewHistoryUrl(asset.ticker, "1", startUnix, endUnix),
-  );
-
-  if (!response.ok) {
-    throw new Error(
-      `Pyth history responded with ${response.status} for ${asset.displaySymbol}.`,
-    );
-  }
-
-  const payload = (await response.json()) as TradingViewHistoryResponse;
-  if (payload.s !== "ok") {
-    throw new Error(
-      payload.errmsg || `Pyth returned ${payload.s} for ${asset.displaySymbol}.`,
-    );
-  }
+  const [payload, strikePrice] = await Promise.all([
+    fetchTradingViewHistory(asset, startUnix, nowUnix),
+    fetchTimedPythPrice(asset, strikeTimestamp),
+  ]);
 
   const candles = zipCandles(payload);
-  const grouped = groupCandlesByUtcDay(candles);
-  const dayKeys = [...grouped.keys()].sort();
-  const liveDayKey = dayKeys.at(-1);
+  const grouped = groupCandlesByUtcHour(candles);
+  const hourKeys = [...grouped.keys()].sort();
+  const liveHourKey = hourKeys.at(-1);
 
-  if (!liveDayKey) {
-    throw new Error(`No live day data returned for ${asset.displaySymbol}.`);
+  if (!liveHourKey) {
+    throw new Error(`No live hour data returned for ${asset.displaySymbol}.`);
   }
 
-  const liveCandles = grouped.get(liveDayKey) ?? [];
+  const liveCandles = grouped.get(liveHourKey) ?? [];
   const firstLive = liveCandles[0];
   const lastLive = liveCandles.at(-1);
 
@@ -151,13 +184,13 @@ async function buildPriceBoardMarket(
     throw new Error(`No live candles returned for ${asset.displaySymbol}.`);
   }
 
-  const historical = dayKeys
+  const historical = hourKeys
     .slice(0, -1)
     .slice(-3)
-    .map((dayKey) => {
-      const dayCandles = grouped.get(dayKey) ?? [];
-      const first = dayCandles[0];
-      const last = dayCandles.at(-1);
+    .map((hourKey) => {
+      const hourCandles = grouped.get(hourKey) ?? [];
+      const first = hourCandles[0];
+      const last = hourCandles.at(-1);
 
       if (!first || !last) {
         return null;
@@ -166,12 +199,11 @@ async function buildPriceBoardMarket(
       const deltaPct = computeDeltaPct(first.open, last.close);
 
       return {
-        date: dayKey,
-        label: formatUtcDay(dayKey),
+        date: `${hourKey}:00:00.000Z`,
         targetPrice: first.open,
         settlePrice: last.close,
-        high: dayCandles.reduce((value, candle) => Math.max(value, candle.high), first.high),
-        low: dayCandles.reduce((value, candle) => Math.min(value, candle.low), first.low),
+        high: hourCandles.reduce((value, candle) => Math.max(value, candle.high), first.high),
+        low: hourCandles.reduce((value, candle) => Math.min(value, candle.low), first.low),
         outcome:
           last.close > first.open
             ? "UP"
@@ -192,11 +224,11 @@ async function buildPriceBoardMarket(
     accent: asset.accent,
     contractAddress: asset.contractAddress,
     question: asset.question,
-    strikeE8: asset.strikeE8,
-    cutoffTime: asset.cutoffTime,
+    strikeE8: Math.round(strikePrice * 1e8),
+    cutoffTime,
     pythAddress: asset.pythAddress,
     currentPrice: lastLive.close,
-    targetPrice: firstLive.open,
+    targetPrice: strikePrice,
     highPrice: liveCandles.reduce(
       (value, candle) => Math.max(value, candle.high),
       firstLive.high,
@@ -205,20 +237,141 @@ async function buildPriceBoardMarket(
       (value, candle) => Math.min(value, candle.low),
       firstLive.low,
     ),
-    movePct: computeDeltaPct(firstLive.open, lastLive.close),
+    movePct: computeDeltaPct(strikePrice, lastLive.close),
     moveDirection:
-      lastLive.close > firstLive.open
+      lastLive.close > strikePrice
         ? "UP"
-        : lastLive.close < firstLive.open
+        : lastLive.close < strikePrice
           ? "DOWN"
           : "FLAT",
-    targetTimestamp: firstLive.time,
+    targetTimestamp: strikeTimestamp,
     series: liveCandles.map((candle) => ({
       time: candle.time,
       value: candle.close,
     })),
     historical,
   };
+}
+
+async function fetchTradingViewHistory(
+  asset: PriceBoardAssetConfig,
+  startUnix: number,
+  endUnix: number,
+): Promise<TradingViewHistoryResponse> {
+  const response = await fetch(
+    buildTradingViewHistoryUrl(asset.ticker, "1", startUnix, endUnix),
+  );
+
+  if (!response.ok) {
+    throw new Error(
+      `Pyth history responded with ${response.status} for ${asset.displaySymbol}.`,
+    );
+  }
+
+  const payload = (await response.json()) as TradingViewHistoryResponse;
+  if (payload.s !== "ok") {
+    throw new Error(
+      payload.errmsg || `Pyth returned ${payload.s} for ${asset.displaySymbol}.`,
+    );
+  }
+
+  return payload;
+}
+
+async function readLiveMarketCutoffs(
+  assets: PriceBoardAssetConfig[],
+): Promise<Map<string, number | null>> {
+  const results = new Map<string, number | null>();
+  const nowMs = Date.now();
+  const uncachedAssets: PriceBoardAssetConfig[] = [];
+
+  for (const asset of assets) {
+    if (!isLiveContractAddress(asset.contractAddress)) {
+      results.set(asset.id, null);
+      continue;
+    }
+
+    const cacheKey = asset.contractAddress.toLowerCase();
+    const cached = cutoffCache.get(cacheKey);
+
+    if (cached && cached.expiresAt > nowMs) {
+      results.set(asset.id, cached.value);
+      continue;
+    }
+
+    uncachedAssets.push(asset);
+  }
+
+  if (uncachedAssets.length === 0) {
+    return results;
+  }
+
+  try {
+    const calls = uncachedAssets.map((asset) => ({
+      address: asset.contractAddress as `0x${string}`,
+      abi: marketStateAbi,
+      functionName: "cutoffTime" as const,
+    }));
+    const response = await publicClient.multicall({
+      allowFailure: true,
+      contracts: calls,
+    });
+
+    response.forEach((entry, index) => {
+      const asset = uncachedAssets[index];
+
+      if (entry.status !== "success") {
+        results.set(asset.id, null);
+        return;
+      }
+
+      const cutoffTime = Number(entry.result);
+      results.set(asset.id, cutoffTime);
+      cutoffCache.set(asset.contractAddress.toLowerCase(), {
+        value: cutoffTime,
+        expiresAt: nowMs + CUTOFF_CACHE_MS,
+      });
+    });
+  } catch {
+    for (const asset of uncachedAssets) {
+      results.set(asset.id, null);
+    }
+  }
+
+  return results;
+}
+
+async function fetchTimedPythPrice(
+  asset: PriceBoardAssetConfig,
+  publishTime: number,
+): Promise<number> {
+  try {
+    const payload = await fetchTimedPythPayload(
+      asset.hermesUrl,
+      asset.feedId,
+      publishTime,
+    );
+    const nextPrice = payload.parsed[0]?.price;
+    if (!nextPrice) {
+      throw new Error("Missing timed Pyth price.");
+    }
+
+    return normalizePythPrice(nextPrice.price, nextPrice.expo);
+  } catch {
+    const response = await fetchTradingViewHistory(
+      asset,
+      publishTime,
+      publishTime + 15 * 60,
+    );
+    const candles = zipCandles(response);
+    const firstCandle = candles[0];
+
+    if (!firstCandle) {
+      throw new Error(`No strike price available for ${asset.displaySymbol}.`);
+    }
+
+    return firstCandle.open;
+  }
 }
 
 function zipCandles(payload: TradingViewHistoryResponse): Candle[] {
@@ -250,35 +403,161 @@ function zipCandles(payload: TradingViewHistoryResponse): Candle[] {
   return candles;
 }
 
-function groupCandlesByUtcDay(candles: Candle[]): Map<string, Candle[]> {
+function groupCandlesByUtcHour(candles: Candle[]): Map<string, Candle[]> {
   const grouped = new Map<string, Candle[]>();
 
   for (const candle of candles) {
-    const dayKey = new Date(candle.time * 1000).toISOString().slice(0, 10);
-    const existing = grouped.get(dayKey);
+    const hourKey = new Date(candle.time * 1000).toISOString().slice(0, 13);
+    const existing = grouped.get(hourKey);
     if (existing) {
       existing.push(candle);
-    } else {
-      grouped.set(dayKey, [candle]);
+      continue;
     }
+
+    grouped.set(hourKey, [candle]);
   }
 
   return grouped;
 }
 
-function computeDeltaPct(base: number, value: number): number {
-  if (base === 0) {
+function computeDeltaPct(start: number, end: number): number {
+  if (start === 0) {
     return 0;
   }
 
-  return ((value - base) / base) * 100;
+  return ((end - start) / start) * 100;
 }
 
-function formatUtcDay(dayKey: string): string {
-  const parsed = new Date(`${dayKey}T00:00:00.000Z`);
-  return parsed.toLocaleDateString(undefined, {
-    month: "short",
-    day: "2-digit",
-    timeZone: "UTC",
+function normalizePrivateKey(value: string | undefined): Hex | null {
+  if (!value) {
+    return null;
+  }
+
+  return (value.startsWith("0x") ? value : `0x${value}`) as Hex;
+}
+
+function isLiveContractAddress(value: string): boolean {
+  return (
+    isAddress(value) &&
+    value.toLowerCase() !== "0x0000000000000000000000000000000000000000"
+  );
+}
+
+function nextHourlyCutoff(referenceUnix: number): number {
+  return (Math.floor(referenceUnix / 3600) + 1) * 3600;
+}
+
+function startAutoResolver(): void {
+  const privateKey = normalizePrivateKey(process.env.PRIVATE_KEY);
+  if (!privateKey) {
+    console.log("Blindside auto-resolver disabled (PRIVATE_KEY missing).");
+    return;
+  }
+
+  const walletClient = createWalletClient({
+    account: privateKeyToAccount(privateKey),
+    chain: monadTestnet,
+    transport: http(config.rpcUrl),
   });
+
+  const tick = async () => {
+    const cutoffTimes = await readLiveMarketCutoffs(config.assets);
+
+    for (const asset of config.assets) {
+      if (!isLiveContractAddress(asset.contractAddress)) {
+        continue;
+      }
+
+      if (settlingMarkets.has(asset.contractAddress)) {
+        continue;
+      }
+
+      const cutoffTime = cutoffTimes.get(asset.id);
+      if (cutoffTime == null) {
+        continue;
+      }
+
+      try {
+        const nowUnix = Math.floor(Date.now() / 1000);
+        if (nowUnix < cutoffTime) {
+          continue;
+        }
+
+        settlingMarkets.add(asset.contractAddress);
+
+        const updateData = await fetchTimedPythUpdate(
+          asset.hermesUrl,
+          asset.feedId,
+          BigInt(cutoffTime),
+        );
+
+        const fee = await publicClient.readContract({
+          address: asset.pythAddress as `0x${string}`,
+          abi: pythAbi,
+          functionName: "getUpdateFee",
+          args: [updateData],
+        });
+
+        const txHash = await walletClient.writeContract({
+          address: asset.contractAddress as `0x${string}`,
+          abi: marketStateAbi,
+          functionName: "resolve",
+          args: [updateData],
+          value: fee,
+        });
+
+        await publicClient.waitForTransactionReceipt({
+          hash: txHash,
+        });
+        cutoffCache.delete(asset.contractAddress.toLowerCase());
+
+        console.log(
+          `Resolved ${asset.displaySymbol} hourly market at cutoff ${cutoffTime} (tx: ${txHash}).`,
+        );
+      } catch (error) {
+        console.error(
+          `Auto-resolve failed for ${asset.displaySymbol}: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      } finally {
+        settlingMarkets.delete(asset.contractAddress);
+      }
+    }
+  };
+
+  void tick();
+  setInterval(() => {
+    void tick();
+  }, 30_000);
+}
+
+async function fetchTimedPythUpdate(
+  hermesUrl: string,
+  feedId: string,
+  cutoffTime: bigint,
+): Promise<Hex[]> {
+  const payload = await fetchTimedPythPayload(hermesUrl, feedId, cutoffTime);
+  return payload.binary.data.map((entry) => `0x${entry}` as Hex);
+}
+
+async function fetchTimedPythPayload(
+  hermesUrl: string,
+  feedId: string,
+  publishTime: number | bigint,
+): Promise<PythTimedResponse> {
+  const payloadUrl = new URL(`/v2/updates/price/${publishTime}`, hermesUrl);
+  payloadUrl.searchParams.append("ids[]", feedId);
+  payloadUrl.searchParams.set("encoding", "hex");
+
+  const response = await fetch(payloadUrl);
+  if (!response.ok) {
+    throw new Error(`Pyth Hermes responded with ${response.status}.`);
+  }
+
+  return (await response.json()) as PythTimedResponse;
+}
+
+function normalizePythPrice(price: string, expo: number): number {
+  return Number(price) * 10 ** expo;
 }

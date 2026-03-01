@@ -343,6 +343,10 @@ summary {
   gap: 10px;
 }
 
+.wallet-action-full {
+  grid-column: 1 / -1;
+}
+
 .section-title {
   display: inline-flex;
   align-items: center;
@@ -563,6 +567,22 @@ summary {
   gap: 8px;
 }
 
+.position-count-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 20px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-strong);
+  color: var(--text-soft);
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
 .compact-history {
   gap: 0;
 }
@@ -703,22 +723,102 @@ summary {
   gap: 8px;
 }
 
-.position-card {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 10px 11px;
+.position-overview {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.position-data-point {
+  min-width: 0;
+  padding: 9px 10px;
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--surface-strong);
+}
+
+.position-data-point span {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--text-faint);
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.position-data-point strong {
+  display: block;
+  font-size: 0.84rem;
+  line-height: 1.25;
+}
+
+.position-summary-block,
+.position-metric {
+  background: linear-gradient(180deg, var(--surface), var(--surface-strong));
+}
+
+.position-summary-block.accent,
+.position-pill.accent {
+  border-color: rgba(15, 118, 110, 0.28);
+}
+
+.position-summary-block.accent strong,
+.position-pill.accent strong {
+  color: var(--accent);
+}
+
+.position-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-strong);
+}
+
+.position-card-head {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.position-card-head strong {
+  font-size: 0.88rem;
+  line-height: 1.2;
+}
+
+.position-card-head span {
+  color: var(--text-faint);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 .position-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
-  color: var(--text-soft);
-  font-size: 0.8rem;
+}
+
+.position-metric.yes {
+  border-left: 3px solid rgba(17, 122, 55, 0.34);
+}
+
+.position-metric.no {
+  border-left: 3px solid rgba(180, 35, 24, 0.34);
+}
+
+.position-metric.open {
+  border-left: 3px solid rgba(100, 116, 139, 0.34);
+}
+
+.position-pill-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
 }
 
 .selected-card,
@@ -814,6 +914,7 @@ summary {
 }
 
 .selected-stats,
+.selected-insights,
 .market-metrics,
 .trade-stats {
   display: grid;
@@ -821,6 +922,10 @@ summary {
 }
 
 .selected-stats {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.selected-insights {
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
@@ -837,7 +942,7 @@ summary {
   background: var(--surface-strong);
 }
 
-.stat-block span,
+.stat-block > span,
 .market-metrics span {
   display: block;
   margin-bottom: 8px;
@@ -847,7 +952,7 @@ summary {
   text-transform: uppercase;
 }
 
-.stat-block strong {
+.stat-block > strong {
   font-size: 0.98rem;
 }
 
@@ -913,7 +1018,7 @@ summary {
 }
 
 .market-contract-row strong {
-  font-size: 0.78rem;
+  font-size: 0.76rem;
   word-break: break-all;
 }
 
@@ -931,7 +1036,11 @@ summary {
 .history-header-row,
 .history-row {
   display: grid;
-  grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr) minmax(0, 0.9fr) auto;
+  grid-template-columns:
+    minmax(0, 1.1fr)
+    minmax(0, 0.9fr)
+    minmax(0, 0.9fr)
+    minmax(76px, 0.65fr);
   gap: 10px;
   align-items: center;
   padding: 10px 12px;
@@ -940,14 +1049,14 @@ summary {
 .history-header-row {
   background: var(--surface-strong);
   color: var(--text-faint);
-  font-size: 0.7rem;
+  font-size: 0.68rem;
   font-weight: 600;
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
 
 .history-row {
-  font-size: 0.84rem;
+  font-size: 0.82rem;
   background: var(--surface);
 }
 
@@ -1090,6 +1199,10 @@ summary {
   .selected-stats {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
+  .selected-insights {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 980px) {
@@ -1125,9 +1238,12 @@ summary {
   }
 
   .selected-stats,
+  .selected-insights,
   .market-metrics,
   .trade-stats,
+  .position-overview,
   .position-grid,
+  .position-pill-row,
   .ticket-grid,
   .ticket-actions,
   .wallet-actions,

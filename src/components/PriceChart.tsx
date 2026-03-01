@@ -15,6 +15,64 @@ type ChartPoint = {
   value: number;
 };
 
+const MIN_PRICE_PRECISION = 2;
+const MAX_PRICE_PRECISION = 8;
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(Math.max(value, min), max);
+}
+
+function getBasePricePrecision(maxAbsValue: number) {
+  if (maxAbsValue < 0.01) {
+    return 6;
+  }
+
+  if (maxAbsValue < 0.1) {
+    return 5;
+  }
+
+  if (maxAbsValue < 1) {
+    return 4;
+  }
+
+  return 2;
+}
+
+function getChartPricePrecision(data: ChartPoint[], targetPrice: number) {
+  const values = data
+    .map((point) => point.value)
+    .filter((value) => Number.isFinite(value));
+
+  if (Number.isFinite(targetPrice)) {
+    values.push(targetPrice);
+  }
+
+  if (!values.length) {
+    return MIN_PRICE_PRECISION;
+  }
+
+  const minValue = Math.min(...values);
+  const maxValue = Math.max(...values);
+  const maxAbsValue = Math.max(...values.map((value) => Math.abs(value)));
+  const range = Math.max(maxValue - minValue, 0);
+  const basePrecision = getBasePricePrecision(maxAbsValue);
+  const rangePrecision =
+    range > 0 ? Math.max(0, Math.ceil(-Math.log10(range / 6))) : 0;
+
+  return clamp(
+    Math.max(basePrecision, rangePrecision),
+    MIN_PRICE_PRECISION,
+    MAX_PRICE_PRECISION,
+  );
+}
+
+function formatChartPrice(value: number, precision: number) {
+  return value.toLocaleString("en-US", {
+    minimumFractionDigits: precision,
+    maximumFractionDigits: precision,
+  });
+}
+
 export function PriceChart({
   data,
   targetPrice,
@@ -110,6 +168,20 @@ export function PriceChart({
       return;
     }
 
+    const precision = getChartPricePrecision(data, targetPrice);
+    series.applyOptions({
+      priceFormat: {
+        type: "price",
+        precision,
+        minMove: 1 / 10 ** precision,
+      },
+    });
+    chart.applyOptions({
+      localization: {
+        priceFormatter: (value) => formatChartPrice(Number(value), precision),
+      },
+    });
+
     series.setData(
       data.map((point) => ({
         time: point.time as UTCTimestamp,
@@ -128,7 +200,7 @@ export function PriceChart({
         lineWidth: 1,
         lineStyle: LineStyle.Dashed,
         axisLabelVisible: true,
-        title: "Target 00:00",
+        // title: "Hourly strike",
       });
     }
 

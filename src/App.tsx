@@ -13,6 +13,7 @@ import {
   isAddress,
   parseAbi,
 } from "viem";
+import { monadTestnet } from "viem/chains";
 
 import { PriceChart } from "./components/PriceChart";
 import { binaryPriceMarketAbi } from "./lib/abi";
@@ -25,8 +26,8 @@ import {
 import bitcoinLogo from "../shared/bitcoin.png";
 import ethereumLogo from "../shared/ethereum.png";
 import masqueradeLogo from "../shared/masquerade.svg";
-import monadLogo from "../shared/monad.png";
 import solanaLogo from "../shared/solana.png";
+import xrpLogo from "../shared/xrp.png";
 
 type PriceBoardMarket = {
   id: string;
@@ -50,7 +51,6 @@ type PriceBoardMarket = {
   series: Array<{ time: number; value: number }>;
   historical: Array<{
     date: string;
-    label: string;
     targetPrice: number;
     settlePrice: number;
     high: number;
@@ -85,6 +85,7 @@ type SubmittedOrderTicket = {
   marketLabel: string;
   side: "YES" | "NO";
   limitPrice: number;
+  slippage: number;
   amountWei: bigint;
   submittedAt: number;
   walletAddress: string;
@@ -115,31 +116,32 @@ type CopyToast = {
   message: string;
 };
 
-const MONAD_USDC_TOKEN = "0x534b2f3A21130d7a60830c2Df862319e593943A3" as const;
+interface MetaMaskProvider {
+  request(args: { method: string; params?: unknown[] }): Promise<unknown>;
+  selectedAddress?: string;
+  isMetaMask?: boolean;
+  providers?: MetaMaskProvider[];
+}
+
 const trackedPrivyAssets = [
   {
     symbol: "MON",
     label: "Native",
     decimals: 18,
   },
-  {
-    symbol: "USDC",
-    label: "ERC-20",
-    decimals: 6,
-    address: MONAD_USDC_TOKEN,
-  },
 ] as const;
 const erc20BalanceAbi = parseAbi([
   "function balanceOf(address owner) view returns (uint256)",
 ]);
 const monadPublicClient = createPublicClient({
+  chain: monadTestnet,
   transport: http(MONAD_RPC_URL),
 });
 const marketLogoByAsset: Record<string, string> = {
   BTC: bitcoinLogo,
   ETH: ethereumLogo,
-  MON: monadLogo,
   SOL: solanaLogo,
+  XRP: xrpLogo,
 };
 
 export default function App() {
@@ -151,11 +153,11 @@ export default function App() {
     createWallet,
     error,
     importWallet,
-    pendingDeposits,
-    pendingWithdrawals,
     ready: unlinkReady,
+    refresh: refreshUnlinkState,
     requestDeposit,
     requestWithdraw,
+    waitForConfirmation,
     walletExists,
   } = useUnlink();
   const { history, loading: historyLoading } = useUnlinkHistory();
@@ -176,6 +178,7 @@ export default function App() {
   const [withdrawAmount, setWithdrawAmount] = useState("0.25");
   const [importText, setImportText] = useState("");
   const [limitPrice, setLimitPrice] = useState("0.58");
+  const [slippage, setSlippage] = useState("0.02");
   const [orderSize, setOrderSize] = useState("0.25");
   const [walletWorking, setWalletWorking] = useState(false);
   const [tradeWorking, setTradeWorking] = useState(false);
@@ -194,6 +197,7 @@ export default function App() {
   const [walletPositions, setWalletPositions] = useState<WalletMarketPosition[]>([]);
   const [showAllHistory, setShowAllHistory] = useState(false);
   const [recentOrders, setRecentOrders] = useState<SubmittedOrderTicket[]>([]);
+  const [pendingRelayIds, setPendingRelayIds] = useState<string[]>([]);
   const [copyToast, setCopyToast] = useState<CopyToast | null>(null);
 
   useEffect(() => {
@@ -215,7 +219,7 @@ export default function App() {
 
     const timer = window.setInterval(() => {
       void loadBoard(false);
-    }, 10000);
+    }, 2000);
 
     return () => {
       window.clearInterval(timer);
@@ -223,15 +227,24 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!selectedMarketId && board?.markets[0]) {
-      setSelectedMarketId(board.markets[0].id);
+    if (selectedMarketId || !board?.markets.length) {
+      return;
     }
+
+    setSelectedMarketId(board.markets[0].id);
   }, [board, selectedMarketId]);
 
   const selectedMarket =
     board?.markets.find((market) => market.id === selectedMarketId) ??
     board?.markets[0] ??
     null;
+  const selectedMarketVolatility = selectedMarket
+    ? computeSeriesVolatilityPct(selectedMarket.series)
+    : 0;
+  const selectedMarketRange = selectedMarket
+    ? Math.max(selectedMarket.highPrice - selectedMarket.lowPrice, 0)
+    : 0;
+  const orderedMarkets = board?.markets ?? [];
   const marketIdsKey =
     board?.markets
       .map((market) => `${market.id}:${market.contractAddress}`)
@@ -256,8 +269,9 @@ export default function App() {
   const selectedDepth = selectedMarket
     ? marketDepth[selectedMarket.id] ?? createEmptyMarketDepth()
     : null;
+  const hasConnectedWallet = wallets.length > 0;
   const vaultBalance = balances[MON_NATIVE_TOKEN.toLowerCase()] ?? 0n;
-  const totalPendingJobs = pendingDeposits.length + pendingWithdrawals.length;
+  const totalPendingJobs = pendingRelayIds.length;
   const unlinkSummary = summarizeUnlinkVault(
     unlinkReady,
     walletExists,
@@ -272,13 +286,22 @@ export default function App() {
     ? loadingPrivyAssets
       ? "Refreshing balances..."
       : "Tracked balances refresh every 30 seconds."
-    : "Connect Privy to view MON and USDC balances.";
+    : "Connect Privy to view MON balances.";
   const tradeTicketTooltip =
-    "Orders post directly to the selected market contract in MON. The transaction hash is stored below after each submission.";
+    "Hourly orders post directly to the selected market contract in MON. Filled positions settle automatically at the top of the hour; resting orders are refunded when the hour rolls.";
   const isHistoryBootstrapping = historyLoading && history.length === 0;
   const visibleHistory = showAllHistory ? history : history.slice(0, 2);
   const hiddenHistoryCount = Math.max(history.length - 2, 0);
   const visibleWalletPositions = walletPositions.filter(hasVisiblePosition);
+  const positionSummary = visibleWalletPositions.reduce(
+    (summary, position) => {
+      summary.lockedWei += position.totalLockedWei;
+      summary.openWei += position.openYesWei + position.openNoWei;
+      summary.claimableWei += position.claimableWei;
+      return summary;
+    },
+    { lockedWei: 0n, openWei: 0n, claimableWei: 0n },
+  );
 
   useEffect(() => {
     if (!embeddedWallet) {
@@ -335,7 +358,7 @@ export default function App() {
 
     const timer = window.setInterval(() => {
       void refreshDepth();
-    }, 6000);
+    }, 2000);
 
     return () => {
       cancelled = true;
@@ -427,23 +450,28 @@ export default function App() {
         }
 
         try {
-          const [yesPoolWei, noPoolWei, orderBook] = await Promise.all([
-            monadPublicClient.readContract({
-              address: market.contractAddress as `0x${string}`,
+          const address = market.contractAddress as `0x${string}`;
+          const contracts = [
+            {
+              address,
               abi: binaryPriceMarketAbi,
               functionName: "yesPool",
-            }),
-            monadPublicClient.readContract({
-              address: market.contractAddress as `0x${string}`,
+            },
+            {
+              address,
               abi: binaryPriceMarketAbi,
               functionName: "noPool",
-            }),
-            monadPublicClient.readContract({
-              address: market.contractAddress as `0x${string}`,
+            },
+            {
+              address,
               abi: binaryPriceMarketAbi,
               functionName: "getOrderBook",
-            }),
-          ]);
+            },
+          ] as const;
+          const [yesPoolWei, noPoolWei, orderBook] = await monadPublicClient.multicall({
+            allowFailure: false,
+            contracts,
+          });
 
           const [bidPrices, bidSizes, askPrices, askSizes] = orderBook;
 
@@ -497,20 +525,25 @@ export default function App() {
         }
 
         try {
-          const [position, openOrders] = await Promise.all([
-            monadPublicClient.readContract({
-              address: market.contractAddress as `0x${string}`,
+          const contractAddress = market.contractAddress as `0x${string}`;
+          const contracts = [
+            {
+              address: contractAddress,
               abi: binaryPriceMarketAbi,
               functionName: "positionOf",
               args: [address as `0x${string}`],
-            }),
-            monadPublicClient.readContract({
-              address: market.contractAddress as `0x${string}`,
+            },
+            {
+              address: contractAddress,
               abi: binaryPriceMarketAbi,
               functionName: "openOrderSummaryOf",
               args: [address as `0x${string}`],
-            }),
-          ]);
+            },
+          ] as const;
+          const [position, openOrders] = await monadPublicClient.multicall({
+            allowFailure: false,
+            contracts,
+          });
 
           const [yesAmountWei, noAmountWei, alreadyClaimed, claimableWei] = position;
           const [openYesWei, openNoWei, totalLockedWei] = openOrders;
@@ -589,6 +622,19 @@ export default function App() {
     }
   }
 
+  function trackPendingRelay(relayId: string): void {
+    setPendingRelayIds((current) =>
+      current.includes(relayId) ? current : [...current, relayId],
+    );
+
+    void waitForConfirmation(relayId)
+      .then(() => refreshUnlinkState())
+      .catch(() => undefined)
+      .finally(() => {
+        setPendingRelayIds((current) => current.filter((id) => id !== relayId));
+      });
+  }
+
   async function handleDeposit(): Promise<void> {
     if (!activeAccount) {
       return;
@@ -599,16 +645,10 @@ export default function App() {
       return;
     }
 
-    if (!privyReady || !walletsReady) {
+    const metaMask = getMetaMaskProvider();
+    if (!metaMask) {
       setWalletError("");
-      setWalletStatus("Privy wallet is still initializing.");
-      return;
-    }
-
-    if (!authenticated || !embeddedWallet) {
-      setWalletError("");
-      setWalletStatus("Connect the Privy wallet, then fund the vault.");
-      connectOrCreateWallet();
+      setWalletStatus("Install MetaMask, then fund the vault from that wallet.");
       return;
     }
 
@@ -617,9 +657,14 @@ export default function App() {
       setWalletError("");
       setWalletStatus("");
 
-      await embeddedWallet.switchChain(MONAD_CHAIN_ID);
-      const provider = await embeddedWallet.getEthereumProvider();
-      const depositor = embeddedWallet.address;
+      await ensureMetaMaskOnMonad(metaMask);
+      const accountsResponse = await metaMask.request({
+        method: "eth_requestAccounts",
+      });
+      const [depositor] = Array.isArray(accountsResponse) ? accountsResponse : [];
+      if (typeof depositor !== "string" || !isAddress(depositor)) {
+        throw new Error("MetaMask did not return a usable account.");
+      }
 
       const relay = await requestDeposit([
         {
@@ -629,7 +674,7 @@ export default function App() {
         },
       ]);
 
-      await provider.request({
+      await metaMask.request({
         method: "eth_sendTransaction",
         params: [
           {
@@ -641,9 +686,8 @@ export default function App() {
         ],
       });
 
-      setWalletStatus(
-        `Deposit submitted from ${compactAddress(embeddedWallet.address)}.`,
-      );
+      trackPendingRelay(relay.relayId);
+      setWalletStatus(`Deposit submitted from ${compactAddress(depositor)}.`);
     } catch (depositError) {
       setWalletError(
         depositError instanceof Error
@@ -698,6 +742,7 @@ export default function App() {
         },
       ]);
 
+      trackPendingRelay(result.relayId);
       setWalletStatus(
         `Withdrawal queued to ${compactAddress(embeddedWallet.address)} (${result.relayId.slice(
           0,
@@ -740,6 +785,7 @@ export default function App() {
     }
 
     const parsedLimit = Number.parseFloat(limitPrice);
+    const parsedSlippage = Number.parseFloat(slippage);
     const collateralWei = parseMon(orderSize);
 
     if (!Number.isFinite(parsedLimit) || parsedLimit <= 0 || parsedLimit >= 1) {
@@ -754,13 +800,25 @@ export default function App() {
       return;
     }
 
+    if (
+      !Number.isFinite(parsedSlippage) ||
+      parsedSlippage < 0 ||
+      parsedSlippage > 0.25
+    ) {
+      setTradeError("Max slippage must be between 0.00 and 0.25.");
+      setTradeStatus("");
+      return;
+    }
+
     try {
       setTradeWorking(true);
       setTradeError("");
       setTradeStatus("");
 
       const normalizedLimit = roundProbability(parsedLimit);
+      const normalizedSlippage = roundSlippage(parsedSlippage);
       const limitPriceBps = Math.round(normalizedLimit * 100);
+      const maxSlippageBps = Math.round(normalizedSlippage * 100);
 
       await embeddedWallet.switchChain(MONAD_CHAIN_ID);
       const provider = await embeddedWallet.getEthereumProvider();
@@ -774,7 +832,7 @@ export default function App() {
             data: encodeFunctionData({
               abi: binaryPriceMarketAbi,
               functionName: "placeLimitOrder",
-              args: [side === "YES", limitPriceBps],
+              args: [side === "YES", limitPriceBps, maxSlippageBps],
             }),
             value: toHexValue(collateralWei),
           },
@@ -787,6 +845,7 @@ export default function App() {
         marketLabel: selectedMarket.displaySymbol,
         side,
         limitPrice: normalizedLimit,
+        slippage: normalizedSlippage,
         amountWei: collateralWei,
         submittedAt: Date.now(),
         walletAddress: embeddedWallet.address,
@@ -949,7 +1008,7 @@ export default function App() {
               </button>
             ) : (
               <div className="form-stack">
-                <label className="field-label">Fund from Privy wallet</label>
+                <label className="field-label">Fund from MetaMask</label>
                 <div className="inline-field">
                   <input
                     className="terminal-input"
@@ -1072,25 +1131,31 @@ export default function App() {
             </div>
 
             <div className={authenticated ? "wallet-actions" : "form-stack"}>
-              <button
-                type="button"
-                className="primary-button"
-                disabled={!privyReady}
-                onClick={() => {
-                  if (authenticated) {
-                    linkWallet();
-                    return;
-                  }
+              {!authenticated || !hasConnectedWallet ? (
+                <button
+                  type="button"
+                  className="primary-button"
+                  disabled={!privyReady}
+                  onClick={() => {
+                    if (authenticated) {
+                      linkWallet();
+                      return;
+                    }
 
-                  connectOrCreateWallet();
-                }}
-              >
-                {authenticated ? "Link Wallet" : "Connect Privy"}
-              </button>
+                    connectOrCreateWallet();
+                  }}
+                >
+                  {authenticated ? "Link Wallet" : "Connect Privy"}
+                </button>
+              ) : null}
               {authenticated ? (
                 <button
                   type="button"
-                  className="secondary-button"
+                  className={
+                    !hasConnectedWallet
+                      ? "secondary-button"
+                      : "secondary-button wallet-action-full"
+                  }
                   onClick={() => {
                     void logout();
                   }}
@@ -1119,7 +1184,15 @@ export default function App() {
             </div>
 
             <div className="subsection">
-              <div className="subsection-title">Current positions</div>
+              <div className="subsection-title-row">
+                <div className="subsection-title">Current positions</div>
+                {visibleWalletPositions.length > 0 ? (
+                  <span className="position-count-pill">
+                    {visibleWalletPositions.length}{" "}
+                    {visibleWalletPositions.length === 1 ? "market" : "markets"}
+                  </span>
+                ) : null}
+              </div>
               {!embeddedWallet ? (
                 <p className="muted-line">Connect Privy to load onchain positions.</p>
               ) : loadingPositions ? (
@@ -1128,26 +1201,88 @@ export default function App() {
                 <p className="muted-line">No positions or resting orders yet.</p>
               ) : (
                 <div className="position-list">
-                  {visibleWalletPositions.map((position) => (
-                    <div key={position.marketId} className="position-card">
-                      <div className="history-line">
-                        <strong>{position.marketLabel}</strong>
-                        <span>{compactAddress(position.contractAddress)}</span>
+                  <div className="position-overview">
+                    <PositionDataPoint
+                      className="position-summary-block"
+                      label="Locked"
+                      value={`${formatMonCompact(positionSummary.lockedWei)} MON`}
+                    />
+                    <PositionDataPoint
+                      className="position-summary-block"
+                      label="Open orders"
+                      value={`${formatMonCompact(positionSummary.openWei)} MON`}
+                    />
+                    <PositionDataPoint
+                      className={
+                        positionSummary.claimableWei > 0n
+                          ? "position-summary-block accent"
+                          : "position-summary-block"
+                      }
+                      label="Claimable"
+                      value={`${formatMonCompact(positionSummary.claimableWei)} MON`}
+                    />
+                  </div>
+                  {visibleWalletPositions.map((position) => {
+                    const claimLabel =
+                      position.claimableWei > 0n
+                        ? "Claim ready"
+                        : position.alreadyClaimed
+                          ? "Claimed"
+                          : "Claimable";
+                    const claimValue =
+                      position.claimableWei > 0n
+                        ? `${formatMonCompact(position.claimableWei)} MON`
+                        : position.alreadyClaimed
+                          ? "Settled"
+                          : "0 MON";
+
+                    return (
+                      <div key={position.marketId} className="position-card">
+                        <div className="position-card-head">
+                          <strong>{position.marketLabel}</strong>
+                          <span>{compactAddress(position.contractAddress)}</span>
+                        </div>
+                        <div className="position-grid">
+                          <PositionDataPoint
+                            className="position-metric yes"
+                            label="YES held"
+                            value={`${formatMonCompact(position.yesAmountWei)} MON`}
+                          />
+                          <PositionDataPoint
+                            className="position-metric no"
+                            label="NO held"
+                            value={`${formatMonCompact(position.noAmountWei)} MON`}
+                          />
+                          <PositionDataPoint
+                            className="position-metric open"
+                            label="Open YES"
+                            value={`${formatMonCompact(position.openYesWei)} MON`}
+                          />
+                          <PositionDataPoint
+                            className="position-metric open"
+                            label="Open NO"
+                            value={`${formatMonCompact(position.openNoWei)} MON`}
+                          />
+                        </div>
+                        <div className="position-pill-row">
+                          <PositionDataPoint
+                            className="position-pill"
+                            label="Locked"
+                            value={`${formatMonCompact(position.totalLockedWei)} MON`}
+                          />
+                          <PositionDataPoint
+                            className={
+                              position.claimableWei > 0n
+                                ? "position-pill accent"
+                                : "position-pill"
+                            }
+                            label={claimLabel}
+                            value={claimValue}
+                          />
+                        </div>
                       </div>
-                      <div className="position-grid">
-                        <span>YES {formatMonCompact(position.yesAmountWei)} MON</span>
-                        <span>NO {formatMonCompact(position.noAmountWei)} MON</span>
-                        <span>Open YES {formatMonCompact(position.openYesWei)} MON</span>
-                        <span>Open NO {formatMonCompact(position.openNoWei)} MON</span>
-                        <span>
-                          Locked {formatMonCompact(position.totalLockedWei)} MON
-                        </span>
-                        <span>
-                          Claimable {formatMonCompact(position.claimableWei)} MON
-                        </span>
-                      </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -1160,7 +1295,7 @@ export default function App() {
           <section className="selected-card">
             <div className="selected-head">
               <div className="selected-title-block">
-                <p className="eyebrow">Market focus</p>
+                <p className="eyebrow">Market Focus</p>
                 {selectedMarket ? (
                   <MarketIdentity market={selectedMarket} titleTag="h2" variant="large" />
                 ) : (
@@ -1171,7 +1306,9 @@ export default function App() {
                 <span
                   className={`direction-pill ${selectedMarket.moveDirection.toLowerCase()}`}
                 >
-                  <span className="live-dot" aria-hidden="true" />
+                  {selectedMarket.moveDirection === "FLAT" ? null : (
+                    <span className="live-dot" aria-hidden="true" />
+                  )}
                   {selectedMarket.moveDirection}
                 </span>
               ) : null}
@@ -1185,7 +1322,7 @@ export default function App() {
                     value={formatUsd(selectedMarket.currentPrice)}
                   />
                   <StatBlock
-                    label="Target (00:00 UTC)"
+                    label="Hourly strike"
                     value={formatUsd(selectedMarket.targetPrice)}
                   />
                   <StatBlock
@@ -1193,18 +1330,36 @@ export default function App() {
                     value={`${formatSignedPercent(selectedMarket.movePct)}%`}
                   />
                   <StatBlock
-                    label="Range"
-                    value={`${formatUsd(selectedMarket.lowPrice)} - ${formatUsd(
-                      selectedMarket.highPrice,
-                    )}`}
+                    label="Ends"
+                    value={formatTimestamp(selectedMarket.cutoffTime * 1000)}
                   />
                 </div>
+
                 <PriceChart
                   data={selectedMarket.series}
                   targetPrice={selectedMarket.targetPrice}
                   accent={selectedMarket.accent}
-                  height={320}
+                  height={360}
                 />
+
+                <div className="selected-insights">
+                  <StatBlock
+                    label="Volatility"
+                    value={`${formatPercent(selectedMarketVolatility)}%`}
+                  />
+                  <StatBlock
+                    label="Session range"
+                    value={formatUsd(selectedMarketRange)}
+                  />
+                  <StatBlock
+                    label="Session high"
+                    value={formatUsd(selectedMarket.highPrice)}
+                  />
+                  <StatBlock
+                    label="Session low"
+                    value={formatUsd(selectedMarket.lowPrice)}
+                  />
+                </div>
               </>
             ) : (
               <p className="muted-line">No market selected.</p>
@@ -1212,83 +1367,60 @@ export default function App() {
           </section>
 
           <section className="market-grid">
-            {board?.markets.map((market) => (
-              <button
-                key={market.id}
-                type="button"
-                className={
-                  market.id === selectedMarket?.id ? "market-card active" : "market-card"
-                }
-                onClick={() => {
-                  setSelectedMarketId(market.id);
-                }}
-              >
-                <div className="market-head">
-                  <MarketIdentity market={market} titleTag="strong" />
-                  <span
-                    className={`direction-pill ${market.moveDirection.toLowerCase()}`}
-                  >
-                    <span className="live-dot" aria-hidden="true" />
-                    {market.moveDirection}
-                  </span>
-                </div>
+            {orderedMarkets.map((market) => {
+              const className =
+                market.id === selectedMarket?.id ? "market-card active" : "market-card";
 
-                <div className="market-metrics">
-                  <div>
-                    <span>Current</span>
-                    <strong>{formatUsd(market.currentPrice)}</strong>
+              return (
+                <button
+                  key={market.id}
+                  type="button"
+                  className={className}
+                  onClick={() => {
+                    setSelectedMarketId(market.id);
+                  }}
+                >
+                  <div className="market-head">
+                    <MarketIdentity market={market} titleTag="strong" />
+                    <span
+                      className={`direction-pill ${market.moveDirection.toLowerCase()}`}
+                    >
+                      <span className="live-dot" aria-hidden="true" />
+                      {market.moveDirection}
+                    </span>
                   </div>
-                  <div>
-                    <span>Target</span>
-                    <strong>{formatUsd(market.targetPrice)}</strong>
-                  </div>
-                  <div>
-                    <span>Move</span>
-                    <strong>{formatSignedPercent(market.movePct)}%</strong>
-                  </div>
-                </div>
 
-                <PriceChart
-                  data={market.series}
-                  targetPrice={market.targetPrice}
-                  accent={market.accent}
-                  height={170}
-                />
-
-                <div className="history-table">
-                  <div className="history-header-row">
-                    <span>Date</span>
-                    <span>Target</span>
-                    <span>Close</span>
-                    <span>Result</span>
-                  </div>
-                  {market.historical.length === 0 ? (
-                    <div className="history-row empty">
-                      <span>Pending</span>
-                      <span>Awaiting</span>
-                      <span>Session</span>
-                      <span className="mini-direction flat">FLAT</span>
+                  <div className="market-metrics">
+                    <div>
+                      <span>Current</span>
+                      <strong>{formatUsd(market.currentPrice)}</strong>
                     </div>
-                  ) : (
-                    market.historical.map((entry) => (
-                      <div key={entry.date} className="history-row">
-                        <span>{entry.label}</span>
-                        <span>{formatUsd(entry.targetPrice)}</span>
-                        <span>{formatUsd(entry.settlePrice)}</span>
-                        <span className={`mini-direction ${entry.outcome.toLowerCase()}`}>
-                          {entry.outcome}
-                        </span>
-                      </div>
-                    ))
-                  )}
-                </div>
+                    <div>
+                      <span>Strike</span>
+                      <strong>{formatUsd(market.targetPrice)}</strong>
+                    </div>
+                    <div>
+                      <span>Move</span>
+                      <strong>{formatSignedPercent(market.movePct)}%</strong>
+                    </div>
+                  </div>
 
-                <div className="market-contract-row">
-                  <span>Contract</span>
-                  <strong>{formatContractLabel(market.contractAddress)}</strong>
-                </div>
-              </button>
-            ))}
+                  <PriceChart
+                    data={market.series}
+                    targetPrice={market.targetPrice}
+                    accent={market.accent}
+                    height={170}
+                  />
+
+                  <MarketHistoryTable market={market} />
+
+                  <div className="market-contract-row">
+                    <span>Contract</span>
+                    <strong>{formatContractLabel(market.contractAddress)}</strong>
+                  </div>
+                </button>
+              );
+            })}
           </section>
         </section>
 
@@ -1307,6 +1439,9 @@ export default function App() {
                 <span
                   className={`direction-pill ${selectedMarket.moveDirection.toLowerCase()}`}
                 >
+                  {selectedMarket.moveDirection === "FLAT" ? null : (
+                    <span className="live-dot" aria-hidden="true" />
+                  )}
                   {selectedMarket.moveDirection}
                 </span>
               ) : null}
@@ -1378,7 +1513,7 @@ export default function App() {
 
             <div className="ticket-grid">
               <div className="form-stack">
-                <label className="field-label">YES limit price</label>
+                <label className="field-label">Limit price</label>
                 <input
                   className="terminal-input"
                   value={limitPrice}
@@ -1395,8 +1530,19 @@ export default function App() {
                   onChange={(event) => {
                     setOrderSize(event.target.value);
                   }}
-                />
+                  />
               </div>
+            </div>
+
+            <div className="form-stack">
+              <label className="field-label">Max slippage</label>
+              <input
+                className="terminal-input"
+                value={slippage}
+                onChange={(event) => {
+                  setSlippage(event.target.value);
+                }}
+              />
             </div>
 
             <div className="ticket-actions">
@@ -1437,7 +1583,8 @@ export default function App() {
                     </div>
                     <div className="history-line muted">
                       <span>
-                        {formatProbability(order.limitPrice)} x{" "}
+                        {formatProbability(order.limitPrice)} +/-{" "}
+                        {formatSlippage(order.slippage)} x{" "}
                         {formatMonCompact(order.amountWei)} MON
                       </span>
                       <span>{compactAddress(order.walletAddress)}</span>
@@ -1597,6 +1744,66 @@ function StatBlock({ label, value }: { label: string; value: string }) {
   );
 }
 
+function PositionDataPoint({
+  className = "",
+  label,
+  value,
+}: {
+  className?: string;
+  label: string;
+  value: string;
+}) {
+  const dataPointClassName = ["position-data-point", className].filter(Boolean).join(" ");
+
+  return (
+    <div className={dataPointClassName}>
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
+function MarketHistoryTable({
+  market,
+  className = "",
+}: {
+  market: Pick<PriceBoardMarket, "historical">;
+  className?: string;
+}) {
+  const tableClassName = ["history-table", className].filter(Boolean).join(" ");
+  const historicalEntries = [...market.historical].reverse();
+
+  return (
+    <div className={tableClassName}>
+      <div className="history-header-row">
+        <span>Date</span>
+        <span>Strike</span>
+        <span>Settle</span>
+        <span>Result</span>
+      </div>
+      {market.historical.length === 0 ? (
+        <div className="history-row empty">
+          <span>Pending</span>
+          <span>Awaiting</span>
+          <span>Session</span>
+          <span className="mini-direction flat">FLAT</span>
+        </div>
+      ) : (
+        historicalEntries.map((entry) => (
+          <div key={entry.date} className="history-row">
+            <span>{formatTimestamp(entry.date)}</span>
+            <span>{formatUsd(entry.targetPrice)}</span>
+            <span>{formatUsd(entry.settlePrice)}</span>
+            <span className={`mini-direction ${entry.outcome.toLowerCase()}`}>
+              {entry.outcome}
+            </span>
+          </div>
+        ))
+      )}
+    </div>
+  );
+}
+
 function apiUrl(pathname: string): string {
   return `${API_BASE_URL}${pathname}`;
 }
@@ -1654,6 +1861,77 @@ function toHexValue(value: bigint): string {
   return `0x${value.toString(16)}`;
 }
 
+function getMetaMaskProvider(): MetaMaskProvider | null {
+  const injectedProvider = window.ethereum as MetaMaskProvider | undefined;
+  if (!injectedProvider) {
+    return null;
+  }
+
+  if (Array.isArray(injectedProvider.providers)) {
+    const nestedMetaMask = injectedProvider.providers.find(
+      (provider) => provider.isMetaMask,
+    );
+    if (nestedMetaMask) {
+      return nestedMetaMask;
+    }
+  }
+
+  return injectedProvider.isMetaMask ? injectedProvider : null;
+}
+
+async function ensureMetaMaskOnMonad(provider: MetaMaskProvider): Promise<void> {
+  const chainId = toHexValue(BigInt(MONAD_CHAIN_ID));
+
+  try {
+    await provider.request({
+      method: "wallet_switchEthereumChain",
+      params: [{ chainId }],
+    });
+  } catch (switchError) {
+    if (!isMissingChainError(switchError)) {
+      throw switchError;
+    }
+
+    await provider.request({
+      method: "wallet_addEthereumChain",
+      params: [
+        {
+          chainId,
+          chainName: "Monad Testnet",
+          nativeCurrency: {
+            name: "Monad",
+            symbol: "MON",
+            decimals: 18,
+          },
+          rpcUrls: [MONAD_RPC_URL],
+          blockExplorerUrls: ["https://testnet.monadexplorer.com"],
+        },
+      ],
+    });
+
+    await provider.request({
+      method: "wallet_switchEthereumChain",
+      params: [{ chainId }],
+    });
+  }
+}
+
+function isMissingChainError(error: unknown): boolean {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+
+  const code =
+    "code" in error && typeof error.code === "number" ? error.code : null;
+  const message =
+    "message" in error && typeof error.message === "string" ? error.message : "";
+
+  return (
+    code === 4902 ||
+    /4902|unknown chain|unrecognized chain|not added to metamask/i.test(message)
+  );
+}
+
 function formatUsd(value: number): string {
   return new Intl.NumberFormat(undefined, {
     style: "currency",
@@ -1666,8 +1944,16 @@ function formatSignedPercent(value: number): string {
   return `${value >= 0 ? "+" : ""}${value.toFixed(2)}`;
 }
 
+function formatPercent(value: number): string {
+  return value.toFixed(2);
+}
+
 function formatProbability(value: number): string {
   return roundProbability(value).toFixed(2);
+}
+
+function formatSlippage(value: number): string {
+  return roundSlippage(value).toFixed(2);
 }
 
 function formatMonCompact(amount: bigint): string {
@@ -1677,7 +1963,7 @@ function formatMonCompact(amount: bigint): string {
 }
 
 function formatMarketSubtitle(asset: string): string {
-  return `${asset} 24 hour up/down`;
+  return `${asset} 1 hour binary`;
 }
 
 function formatTimestamp(value: string | number): string {
@@ -1837,6 +2123,38 @@ function computeSuggestedLimitPrice(
 
 function roundProbability(value: number): number {
   return Math.min(0.99, Math.max(0.01, Math.round(value * 100) / 100));
+}
+
+function roundSlippage(value: number): number {
+  return Math.min(0.25, Math.max(0, Math.round(value * 100) / 100));
+}
+
+function computeSeriesVolatilityPct(
+  series: Array<{ time: number; value: number }>,
+): number {
+  if (series.length < 2) {
+    return 0;
+  }
+
+  const returns: number[] = [];
+  for (let index = 1; index < series.length; index += 1) {
+    const previous = series[index - 1]?.value ?? 0;
+    const current = series[index]?.value ?? 0;
+    if (previous <= 0 || current <= 0) {
+      continue;
+    }
+
+    returns.push((current - previous) / previous);
+  }
+
+  if (returns.length === 0) {
+    return 0;
+  }
+
+  const mean = returns.reduce((sum, value) => sum + value, 0) / returns.length;
+  const variance =
+    returns.reduce((sum, value) => sum + (value - mean) ** 2, 0) / returns.length;
+  return Math.sqrt(variance) * 100;
 }
 
 function isLiveContractAddress(value: string): boolean {

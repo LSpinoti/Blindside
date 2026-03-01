@@ -4,7 +4,9 @@
   "description": "Blindside private prediction market MVP for Monad and Unlink.",
   "type": "module",
   "scripts": {
-    "dev": "concurrently -n api,web \"pnpm dev:api\" \"pnpm dev:web\"",
+    "dev": "pnpm dev:with-agents",
+    "dev:with-agents": "BLINDSIDE_ENABLE_DEMO_LIQUIDITY=1 concurrently -n api,web \"pnpm dev:api\" \"pnpm dev:web\"",
+    "dev:no-agents": "BLINDSIDE_ENABLE_DEMO_LIQUIDITY=0 concurrently -n api,web \"pnpm dev:api\" \"pnpm dev:web\"",
     "dev:api": "tsx watch server/index.ts",
     "dev:web": "vite",
     "build": "pnpm build:web && pnpm build:api && pnpm build:contracts",
@@ -12,9 +14,11 @@
     "build:web": "vite build",
     "build:contracts": "\"$HOME/.foundry/bin/forge\" build --root contracts",
     "preview": "vite preview",
-    "start:api": "node dist/api/server/index.js",
+    "start:api": "pnpm start:api:with-agents",
+    "start:api:with-agents": "BLINDSIDE_ENABLE_DEMO_LIQUIDITY=1 node dist/api/server/index.js",
+    "start:api:no-agents": "BLINDSIDE_ENABLE_DEMO_LIQUIDITY=0 node dist/api/server/index.js",
     "resolve:market": "tsx contracts/script/resolve-market.ts",
-    "deploy:market": "bash -lc 'set -a; [ -f .env ] && source .env; set +a; cd contracts && \"$HOME/.foundry/bin/forge\" script script/DeployBlindsideMarkets.s.sol:DeployBlindsideMarketsScript --rpc-url \"${MONAD_RPC_URL:-https://testnet-rpc.monad.xyz}\" --private-key \"$PRIVATE_KEY\" --broadcast --legacy'"
+    "deploy:market": "tsx contracts/script/deploy-markets.ts"
   },
   "keywords": [],
   "author": "",

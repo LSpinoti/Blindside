@@ -1,0 +1,12 @@
+[
+  {
+    "name": "maker-yes",
+    "privateKey": "0x0ea2c9154a350713a07a32a2773c79c45c0630f5dd8f45eff83fd8870df89d8c",
+    "address": "0x41E9559bA82B9df7d3f4D7F9ecce9A70D31b80D0"
+  },
+  {
+    "name": "maker-no",
+    "privateKey": "0xf7ada011a4f67e674067984c25ba1815cceba8f23f184ac046a89877c2f4c811",
+    "address": "0x3A1Ae15284499b78C7d0e37F535FA959fA6E3F9c"
+  }
+]

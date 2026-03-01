@@ -20,6 +20,7 @@ export const binaryPriceMarketAbi = [
     inputs: [
       { name: "side", type: "bool" },
       { name: "limitPriceBps", type: "uint8" },
+      { name: "maxSlippageBps", type: "uint8" },
     ],
     outputs: [{ name: "orderId", type: "uint64" }],
   },
@@ -60,21 +61,7 @@ export const binaryPriceMarketAbi = [
   },
   {
     type: "function",
-    name: "resolved",
-    stateMutability: "view",
-    inputs: [],
-    outputs: [{ name: "", type: "bool" }],
-  },
-  {
-    type: "function",
-    name: "resolvedOutcome",
-    stateMutability: "view",
-    inputs: [],
-    outputs: [{ name: "", type: "bool" }],
-  },
-  {
-    type: "function",
-    name: "settlementPrice",
+    name: "strikeE8",
     stateMutability: "view",
     inputs: [],
     outputs: [{ name: "", type: "int64" }],
