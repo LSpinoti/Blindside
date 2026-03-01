@@ -12,7 +12,7 @@
     "build": "pnpm build:web && pnpm build:api && pnpm build:contracts",
     "build:api": "tsc -p tsconfig.server.json",
     "build:web": "vite build",
-    "build:contracts": "\"$HOME/.foundry/bin/forge\" build --root contracts",
+    "build:contracts": "node scripts/build-contracts.mjs",
     "preview": "vite preview",
     "start:api": "pnpm start:api:with-agents",
     "start:api:with-agents": "BLINDSIDE_ENABLE_DEMO_LIQUIDITY=1 node dist/api/server/index.js",
